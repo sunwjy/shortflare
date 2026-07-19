@@ -2,7 +2,7 @@
 
 Shortflare is an open-source URL shortening service designed to make the most
 of Cloudflare's infrastructure. Its goal is to let anyone deploy and own a URL
-shortener with a single Cloudflare CLI command.
+shortener in their Cloudflare account with a single command.
 
 > [!IMPORTANT]
 > Shortflare is currently in the idea and early development stage. It is not
@@ -17,11 +17,11 @@ self-hosted service that can be deployed to a user's own Cloudflare account,
 with an ideal deployment experience as simple as:
 
 ```sh
-npx wrangler deploy
+npx shortflare@latest deploy
 ```
 
-The exact command and Cloudflare services used by the project will be decided
-as the implementation develops.
+The target system design and Cloudflare resources are documented in
+[the architecture](docs/architecture.md).
 
 ## Planned features
 
@@ -30,7 +30,8 @@ The initial version of Shortflare is expected to include:
 - Custom short paths
 - Click analytics
 - A management UI
-- A REST API
+
+A documented REST API is planned after the first usable release.
 
 ## Project goals
 
@@ -41,8 +42,8 @@ The initial version of Shortflare is expected to include:
 
 ## Status
 
-Shortflare is at an early stage. The architecture, storage layer, Cloudflare
-products, configuration, and public API have not been finalized yet.
+Shortflare is at an early stage. The target architecture and initial product
+scope are documented, but the implementation and public API are not ready yet.
 
 If you are interested in shaping the project, you can share ideas or follow its
 progress through [GitHub Issues](https://github.com/sunwjy/shortflare/issues).

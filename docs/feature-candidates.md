@@ -7,17 +7,20 @@ needs become clearer.
 Shortflare should remain focused on being a small, understandable, personal URL
 shortener that can be deployed through a simple Cloudflare-oriented workflow.
 
-## MVP
+## First release
 
 ### Link management
 
-- Create, list, search, edit, disable, and delete short links.
+- Create, list, search, edit, disable, archive, restore, and permanently delete
+  Links.
 - Generate random aliases or accept user-defined aliases.
 - Detect reserved paths and alias collisions.
-- Store a title, destination, optional tags, timestamps, and link status.
+- Store a title, versioned destinations, optional tags, timestamps, and Link
+  status.
 - Support one custom short domain.
-- Allow a development or setup domain when a custom domain is unavailable.
 - Preserve click history when a destination changes.
+- Reserve an Alias after archival or permanent deletion unless an Administrator
+  explicitly releases it.
 
 ### Analytics
 
@@ -25,21 +28,35 @@ shortener that can be deployed through a simple Cloudflare-oriented workflow.
 - Referrer, country, and coarse device category.
 - Per-link analytics and a compact all-links overview.
 - Date filters and top-link ranking.
-- Configurable data retention.
+- Keep raw click events for 90 days and daily rollups until explicitly deleted.
 - Privacy-aware collection without persistent visitor fingerprinting.
 
 ### Admin UI
 
-- Single-owner authentication and session management.
+- Invite-only User authentication and session management.
+- Administrator, Member, and Viewer roles.
 - Overview dashboard.
 - Searchable and filterable link table.
 - Link creation and editing forms.
-- Link copy action and clear active, disabled, and expired states.
+- Link copy action and clear Active, Disabled, and Archived states.
 - Link detail page with analytics.
+
+### Deployment and security baseline
+
+- Provide one documented deployment workflow through
+  `npx shortflare@latest deploy`.
+- Automate resource provisioning where practical.
+- Document migrations, secrets, backup, and restore procedures.
+- Validate destination schemes and prevent redirect loops.
+- Use secure cookies and protect administrative routes.
+- Support configurable rate limits and bot filtering.
+- Record administrative mutations in an audit log.
+
+## Next
 
 ### REST API
 
-- Link creation, retrieval, update, disable, and deletion endpoints.
+- Link creation, retrieval, update, disable, archive, and deletion endpoints.
 - Analytics endpoints.
 - Hashed bearer tokens with revocation.
 - Pagination and consistent error responses.
@@ -54,19 +71,6 @@ shortener that can be deployed through a simple Cloudflare-oriented workflow.
 - Support optional custom query parameters.
 - Integrate UTM fields into the normal link creation and editing flow.
 - Expose UTM fields through the REST API.
-
-### Deployment and security baseline
-
-- Provide one documented deployment workflow, ideally ending in
-  `npx wrangler deploy`.
-- Automate resource provisioning where practical.
-- Document migrations, secrets, backup, and restore procedures.
-- Validate destination schemes and prevent redirect loops.
-- Use secure cookies and protect administrative routes.
-- Support configurable rate limits and bot filtering.
-- Record administrative mutations in an audit log.
-
-## Next
 
 ### Campaigns
 
@@ -108,7 +112,6 @@ overlapping responsibilities.
 - Browser, operating system, and city analytics.
 - Real-time event streams.
 - Multiple custom domains.
-- Multiple owners, invitations, and simple roles.
 - Third-party automation after the REST API and webhooks are stable.
 
 ## Out of scope for now
@@ -126,10 +129,10 @@ overlapping responsibilities.
 
 ## Suggested release slices
 
-1. **Usable shortener:** single owner, custom domain, link management, custom
-   aliases, redirects, total clicks, and an admin UI.
-2. **Useful measurement:** time-series analytics, referrer, country, device,
-   REST API, and the UTM Builder.
+1. **Useful shortener:** invite-only Users and roles, custom domain, Link
+   management, custom Aliases, redirects, time-series analytics, referrer,
+   country, device, and a management UI.
+2. **Automation:** REST API, OpenAPI, bearer tokens, and the UTM Builder.
 3. **Campaign workflow:** campaigns, UTM templates, channel variants,
    aggregate reports, and CSV export.
 4. **Convenience:** expiration, QR codes, import and export, scoped tokens, and
