@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "warn"
+  },
+  "plugins": ["import", "typescript", "unicorn", "react", "react-perf"],
+  "rules": {
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+    "react/react-in-jsx-scope": "off"
+  },
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/coverage/**",
+    "**/.turbo/**",
+    "**/.wrangler/**",
+    "**/routeTree.gen.ts",
+    "**/worker-configuration.d.ts"
+  ],
+  "options": {
+    "maxWarnings": 0
+  }
+}

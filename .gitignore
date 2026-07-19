@@ -1,0 +1,8 @@
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+.turbo/
+.wrangler/
+.dev.vars*
+*.tsbuildinfo

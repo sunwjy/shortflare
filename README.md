@@ -45,6 +45,19 @@ A documented REST API is planned after the first usable release.
 Shortflare is at an early stage. The target architecture and initial product
 scope are documented, but the implementation and public API are not ready yet.
 
+## Development
+
+The monorepo uses pnpm, Turborepo, TypeScript, Oxlint, Oxfmt, and Vitest.
+
+```sh
+pnpm install
+pnpm check
+pnpm dev
+```
+
+`pnpm dev` starts the Redirect and Management Workers through Vite's Cloudflare
+runtime integration. Run a single workspace with `pnpm --filter <workspace> dev`.
+
 If you are interested in shaping the project, you can share ideas or follow its
 progress through [GitHub Issues](https://github.com/sunwjy/shortflare/issues).
 

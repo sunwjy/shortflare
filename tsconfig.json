@@ -1,0 +1,4 @@
+{
+  "extends": "./packages/tooling/typescript/base.json",
+  "files": []
+}

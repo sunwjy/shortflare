@@ -1,0 +1,36 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true
+
+catalog:
+  "@cloudflare/vite-plugin": 1.45.1
+  "@cloudflare/vitest-pool-workers": 0.18.6
+  "@cloudflare/workers-types": 5.20260719.1
+  "@tanstack/react-query": 5.101.2
+  "@tanstack/react-router": 1.170.18
+  "@types/node": 26.1.1
+  "@types/react": 19.2.17
+  "@types/react-dom": 19.2.3
+  "@vitejs/plugin-react": 6.0.3
+  drizzle-kit: 0.31.10
+  drizzle-orm: 0.45.2
+  hono: 4.12.31
+  oxfmt: 0.59.0
+  oxlint: 1.74.0
+  react: 19.2.7
+  react-dom: 19.2.7
+  turbo: 2.10.5
+  typescript: 6.0.3
+  vite: 8.1.5
+  vitest: 4.1.10
+  wrangler: 4.112.0
+  zod: 4.4.3
+
+minimumReleaseAgeExclude:
+  - "@cloudflare/workers-types@5.20260719.1"
+  - hono@4.12.31

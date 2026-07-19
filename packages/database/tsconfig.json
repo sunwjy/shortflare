@@ -1,0 +1,4 @@
+{
+  "extends": "../tooling/typescript/worker.json",
+  "include": ["src", "test"]
+}
