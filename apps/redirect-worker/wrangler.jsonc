@@ -3,4 +3,20 @@
   "name": "shortflare-redirect",
   "main": "./src/index.ts",
   "compatibility_date": "2026-07-19",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "shortflare",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../../packages/database/drizzle/migrations",
+    },
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "ANALYTICS_QUEUE",
+        "queue": "shortflare-events",
+      },
+    ],
+  },
 }

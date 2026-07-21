@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "db:migrate:local": "wrangler d1 migrations apply shortflare --local",
     "dev": "vite dev",
     "preview": "vite preview",
     "test": "vitest run",
