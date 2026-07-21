@@ -3,6 +3,22 @@
   "name": "shortflare-management",
   "main": "./src/worker/index.ts",
   "compatibility_date": "2026-07-19",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "shortflare",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../../packages/database/drizzle/migrations",
+    },
+  ],
+  "queues": {
+    "consumers": [
+      {
+        "queue": "shortflare-events",
+        "max_batch_timeout": 1,
+      },
+    ],
+  },
   "assets": {
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"],

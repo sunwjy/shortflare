@@ -58,6 +58,19 @@ pnpm dev
 `pnpm dev` starts the Redirect and Management Workers through Vite's Cloudflare
 runtime integration. Run a single workspace with `pnpm --filter <workspace> dev`.
 
+Apply the versioned migrations to the local D1 database with:
+
+```sh
+pnpm --filter @shortflare/management db:migrate:local
+```
+
+The Redirect Worker integration suite builds both Workers and verifies the local
+Redirect Worker → Queue → Management Worker → shared D1 flow:
+
+```sh
+pnpm --filter @shortflare/redirect-worker test
+```
+
 If you are interested in shaping the project, you can share ideas or follow its
 progress through [GitHub Issues](https://github.com/sunwjy/shortflare/issues).
 
