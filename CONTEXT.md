@@ -53,7 +53,7 @@ A Link that redirects requests to its current Destination Version.
 _Avoid_: Enabled link, live link
 
 **Disabled Link**:
-A temporarily paused Link that remains visible in normal management views and keeps its Alias, analytics, and change history.
+A non-redirecting Link that remains visible in normal management views and keeps its Alias, analytics, and change history. A restored Link enters this state until explicitly activated.
 _Avoid_: Deleted link, archived link
 
 **Destination Version**:
@@ -69,9 +69,9 @@ An approximate count that treats repeated Human Clicks on the same Link by the s
 _Avoid_: Unique visitor, unique click
 
 **Archived Link**:
-A recoverable Link that no longer redirects while retaining its analytics and change history.
+A recoverable Link that no longer redirects while retaining its Alias, analytics, and change history.
 _Avoid_: Deleted link, disabled link
 
 **Reserved Alias**:
-An alias retained after its Link is archived or permanently deleted so that an old public URL cannot silently point to an unrelated destination.
+A formerly public Alias retained after its Link is permanently deleted so that the old URL cannot silently point to an unrelated destination. Releasing it is a separate administrative act.
 _Avoid_: Tombstone, deleted alias
