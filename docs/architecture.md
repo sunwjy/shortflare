@@ -141,12 +141,13 @@ Its external interface is organized around behavior rather than tables:
 type Links = {
   resolve(alias: string): Promise<RedirectDecision>;
   execute(command: LinkCommand, actor: Actor): Promise<LinkResult>;
-  query(query: LinkQuery, actor: Actor): Promise<LinkPage | LinkDetail>;
+  query(query: LinkQuery, actor: Actor): Promise<LinkQueryResult>;
 };
 ```
 
 The persistence seam is owned by this module. D1 and in-memory adapters satisfy
-it. Callers do not receive Drizzle models or issue database queries.
+it. Expected command and query failures use discriminated result types; callers
+do not receive Drizzle models or issue database queries.
 
 ### Analytics module
 

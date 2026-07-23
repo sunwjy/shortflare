@@ -102,6 +102,20 @@ describe("Links", () => {
       ok: false,
       kind: "invalid-title",
     });
+    await expect(
+      links.execute(
+        {
+          kind: "create",
+          alias: "Separator",
+          destination: "https://example.com",
+          title: "Line one\u2028Line two",
+        },
+        actor,
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      kind: "invalid-title",
+    });
   });
 
   it.each([
@@ -463,6 +477,74 @@ describe("Links", () => {
     await expect(links.resolve("Docs", "source=one&source=two")).resolves.toMatchObject({
       kind: "redirect",
       destination: "https://example.com/path?stored=yes&source=one&source=two#section",
+    });
+  });
+
+  it("preserves every Destination Version across concurrent last-write-wins updates", async () => {
+    const links = createTestLinks();
+    const created = await links.execute(
+      {
+        kind: "create",
+        alias: "Docs",
+        destination: "https://example.com/v1",
+        title: "Documentation",
+      },
+      actor,
+    );
+    if (!created.ok || created.kind !== "link") {
+      throw new Error("expected Link creation to succeed");
+    }
+
+    await Promise.all([
+      links.execute(
+        {
+          kind: "update-destination",
+          linkId: created.link.id,
+          destination: "https://example.com/v2",
+        },
+        actor,
+      ),
+      links.execute(
+        {
+          kind: "update-destination",
+          linkId: created.link.id,
+          destination: "https://example.com/v3",
+        },
+        actor,
+      ),
+    ]);
+
+    await expect(
+      links.query({ kind: "detail", linkId: created.link.id }, actor),
+    ).resolves.toMatchObject({
+      ok: true,
+      kind: "detail",
+      link: {
+        destinationVersions: [
+          { destination: "https://example.com/v1" },
+          { destination: "https://example.com/v2" },
+          { destination: "https://example.com/v3" },
+        ],
+      },
+    });
+  });
+
+  it("uses Unicode case folding for management search", async () => {
+    const links = createTestLinks();
+    await links.execute(
+      {
+        kind: "create",
+        alias: "Street",
+        destination: "https://example.com",
+        title: "Straße guide",
+      },
+      actor,
+    );
+
+    await expect(links.query({ kind: "list", search: "STRASSE" }, actor)).resolves.toMatchObject({
+      ok: true,
+      kind: "page",
+      page: { items: [{ alias: "Street" }] },
     });
   });
 });
