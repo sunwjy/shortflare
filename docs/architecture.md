@@ -214,9 +214,15 @@ belong in the Drizzle schema, not this document.
 | Audit | administrative mutation events | actor, action, subject ID, time, and non-sensitive metadata are retained |
 | Deployment | schema and application version metadata | both Workers must be compatible with the recorded schema version |
 
-Permanent Link deletion removes destinations, raw events, and rollups but keeps
-the Reserved Alias and a minimal, non-sensitive audit record. Alias release is
-a separate Administrator-only action with reauthentication and a strong warning.
+Archiving keeps the Link's Alias, analytics, and change history. Restoring an
+Archived Link always produces a Disabled Link so its Destination can be
+reviewed before redirects resume.
+
+Only Archived Links can be permanently deleted. Permanent deletion removes
+destinations, raw events, and rollups but replaces the Link with a Reserved
+Alias that returns `410 Gone` and keeps a minimal, non-sensitive audit record.
+Alias release is allowed only after permanent deletion and is a separate
+Administrator-only action with reauthentication and a strong warning.
 
 ## Authentication and authorization
 

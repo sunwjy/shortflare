@@ -19,8 +19,8 @@ shortener that can be deployed through a simple Cloudflare-oriented workflow.
   status.
 - Support one custom short domain.
 - Preserve click history when a destination changes.
-- Reserve an Alias after archival or permanent deletion unless an Administrator
-  explicitly releases it.
+- Keep an Alias attached while its Link is archived. After permanent deletion,
+  retain it as a Reserved Alias unless an Administrator explicitly releases it.
 
 ### Analytics
 
