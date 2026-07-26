@@ -88,7 +88,7 @@ export const sessions = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     tokenHash: text("token_hash").notNull(),
-    csrfTokenHash: text("csrf_token_hash").notNull(),
+    csrfToken: text("csrf_token").notNull(),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
     idleExpiresAt: integer("idle_expires_at", { mode: "timestamp_ms" }).notNull(),
@@ -100,7 +100,7 @@ export const sessions = sqliteTable(
   (table) => [
     check("sessions_id_check", idCheck(table.id)),
     check("sessions_token_hash_check", sql`length(${table.tokenHash}) = 64`),
-    check("sessions_csrf_token_hash_check", sql`length(${table.csrfTokenHash}) = 64`),
+    check("sessions_csrf_token_check", sql`length(${table.csrfToken}) BETWEEN 1 AND 128`),
     check("sessions_created_at_check", timestampCheck(table.createdAt)),
     check("sessions_last_seen_at_check", timestampCheck(table.lastSeenAt)),
     check("sessions_idle_expires_at_check", timestampCheck(table.idleExpiresAt)),

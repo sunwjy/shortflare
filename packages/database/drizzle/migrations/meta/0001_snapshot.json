@@ -816,8 +816,8 @@
           "notNull": true,
           "autoincrement": false
         },
-        "csrf_token_hash": {
-          "name": "csrf_token_hash",
+        "csrf_token": {
+          "name": "csrf_token",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -898,9 +898,9 @@
           "name": "sessions_token_hash_check",
           "value": "length(\"sessions\".\"token_hash\") = 64"
         },
-        "sessions_csrf_token_hash_check": {
-          "name": "sessions_csrf_token_hash_check",
-          "value": "length(\"sessions\".\"csrf_token_hash\") = 64"
+        "sessions_csrf_token_check": {
+          "name": "sessions_csrf_token_check",
+          "value": "length(\"sessions\".\"csrf_token\") BETWEEN 1 AND 128"
         },
         "sessions_created_at_check": {
           "name": "sessions_created_at_check",

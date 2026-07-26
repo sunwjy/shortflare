@@ -1,5 +1,7 @@
 import { Buffer } from "node:buffer";
-import { scrypt, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
+
+import { createPasswordVerifier, dummyVerifier, verifyPassword } from "./passwords";
 
 export type UserRole = "administrator" | "member" | "viewer";
 export type UserState = "invited" | "active" | "suspended";
@@ -32,6 +34,12 @@ type CompleteInitialSetupInput = Readonly<{
 type TokenFailure = Readonly<{ ok: false; kind: "invalid-or-expired-token" }>;
 type PasswordFailure = Readonly<{ ok: false; kind: "invalid-password" }>;
 type UserResult = Readonly<{ ok: true; kind: "user"; user: User }>;
+type RequestUserResult = Readonly<{
+  ok: true;
+  kind: "user";
+  user: User;
+  recentlyAuthenticated: boolean;
+}>;
 type LoginFailure = Readonly<{ ok: false; kind: "invalid-credentials" }>;
 type CsrfFailure = Readonly<{ ok: false; kind: "invalid-csrf-token" }>;
 type ReauthenticationFailure = Readonly<{
@@ -70,24 +78,6 @@ type PasswordResetResult = Readonly<{
     expiresAt: Date;
   }>;
 }>;
-
-const scryptPolicy = {
-  N: 32_768,
-  r: 8,
-  p: 1,
-  outputLength: 32,
-  maxmem: 48 * 1_024 * 1_024,
-} as const;
-
-const blockedPasswords = new Set([
-  "123456789012345",
-  "correct horse battery staple",
-  "letmeinletmeinletmein",
-  "passwordpassword",
-  "qwertyuiopasdfgh",
-]);
-const dummyVerifier =
-  "scrypt$v=1$N=32768,r=8,p=1,l=32$BwcHBwcHBwcHBwcHBwcHBw$5ZN-eW8mCOZ-tc6XvKT-cn5aLMwFQ-hPtgjaL-IM0-0";
 
 const idleSessionDuration = 7 * 24 * 60 * 60 * 1_000;
 const absoluteSessionDuration = 30 * 24 * 60 * 60 * 1_000;
@@ -265,12 +255,22 @@ export function createIdentity(options: IdentityOptions) {
             .bind(email.normalized)
             .first<User & { verifier: string | null }>()
         : null;
-      const verified = await verifyPassword(input.password, record?.verifier ?? dummyVerifier);
-      if (!record || record.state !== "active" || !record.verifier || !verified) {
+      const verification = await verifyPassword(input.password, record?.verifier ?? dummyVerifier);
+      if (!record || record.state !== "active" || !record.verifier || !verification.valid) {
         return { ok: false, kind: "invalid-credentials" };
       }
 
       const occurredAt = now().getTime();
+      if (verification.needsRehash) {
+        const verifier = await createPasswordVerifier(input.password);
+        if (!verifier) {
+          return { ok: false, kind: "invalid-credentials" };
+        }
+        await options.db
+          .prepare("UPDATE credentials SET verifier = ?, updated_at = ? WHERE user_id = ?")
+          .bind(verifier, occurredAt, record.id)
+          .run();
+      }
       const sessionId = randomId();
       const token = randomToken();
       const csrfToken = randomToken();
@@ -278,7 +278,7 @@ export function createIdentity(options: IdentityOptions) {
       await options.db
         .prepare(
           `INSERT INTO sessions
-             (id, user_id, token_hash, csrf_token_hash, created_at, last_seen_at,
+             (id, user_id, token_hash, csrf_token, created_at, last_seen_at,
               idle_expires_at, absolute_expires_at, recent_authentication_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
@@ -286,7 +286,7 @@ export function createIdentity(options: IdentityOptions) {
           sessionId,
           record.id,
           await hashToken(token),
-          await hashToken(csrfToken),
+          csrfToken,
           occurredAt,
           occurredAt,
           occurredAt + idleSessionDuration,
@@ -331,7 +331,7 @@ export function createIdentity(options: IdentityOptions) {
       token: string,
       csrfToken: string,
       requireRecentAuthentication = false,
-    ): Promise<LoginFailure | CsrfFailure | ReauthenticationFailure | UserResult> {
+    ): Promise<LoginFailure | CsrfFailure | ReauthenticationFailure | RequestUserResult> {
       const occurredAt = now().getTime();
       const record = await options.db
         .prepare(
@@ -340,7 +340,9 @@ export function createIdentity(options: IdentityOptions) {
              users.display_email AS email,
              users.role,
              users.state,
-             sessions.csrf_token_hash AS csrfTokenHash,
+             sessions.csrf_token AS csrfToken,
+             sessions.last_seen_at AS lastSeenAt,
+             sessions.absolute_expires_at AS absoluteExpiresAt,
              sessions.recent_authentication_at AS recentAuthenticationAt
            FROM sessions
            INNER JOIN users ON users.id = sessions.user_id
@@ -350,26 +352,49 @@ export function createIdentity(options: IdentityOptions) {
              AND users.state = 'active'`,
         )
         .bind(await hashToken(token), occurredAt, occurredAt)
-        .first<User & { csrfTokenHash: string; recentAuthenticationAt: number }>();
+        .first<
+          User & {
+            csrfToken: string;
+            lastSeenAt: number;
+            absoluteExpiresAt: number;
+            recentAuthenticationAt: number;
+          }
+        >();
       if (!record) {
         return { ok: false, kind: "invalid-credentials" };
       }
-      const suppliedCsrfHash = await hashToken(csrfToken);
       if (
-        !timingSafeEqual(
-          Buffer.from(record.csrfTokenHash, "hex"),
-          Buffer.from(suppliedCsrfHash, "hex"),
-        )
+        Buffer.byteLength(record.csrfToken) !== Buffer.byteLength(csrfToken) ||
+        !timingSafeEqual(Buffer.from(record.csrfToken), Buffer.from(csrfToken))
       ) {
         return { ok: false, kind: "invalid-csrf-token" };
       }
-      if (
-        requireRecentAuthentication &&
-        occurredAt - record.recentAuthenticationAt > recentAuthenticationDuration
-      ) {
+      const recentlyAuthenticated =
+        occurredAt - record.recentAuthenticationAt <= recentAuthenticationDuration;
+      if (requireRecentAuthentication && !recentlyAuthenticated) {
         return { ok: false, kind: "reauthentication-required" };
       }
-      return { ok: true, kind: "user", user: toUser(record) };
+      if (occurredAt - record.lastSeenAt >= 60 * 60 * 1_000) {
+        await options.db
+          .prepare(
+            `UPDATE sessions
+             SET last_seen_at = ?, idle_expires_at = ?
+             WHERE token_hash = ? AND last_seen_at = ?`,
+          )
+          .bind(
+            occurredAt,
+            Math.min(occurredAt + idleSessionDuration, record.absoluteExpiresAt),
+            await hashToken(token),
+            record.lastSeenAt,
+          )
+          .run();
+      }
+      return {
+        ok: true,
+        kind: "user",
+        user: toUser(record),
+        recentlyAuthenticated,
+      };
     },
 
     async openSession(token: string): Promise<LoginFailure | SessionResult> {
@@ -377,8 +402,7 @@ export function createIdentity(options: IdentityOptions) {
       const record = await options.db
         .prepare(
           `SELECT
-             sessions.id AS sessionId,
-             sessions.last_seen_at AS lastSeenAt,
+             sessions.csrf_token AS csrfToken,
              sessions.absolute_expires_at AS absoluteExpiresAt,
              users.id,
              users.display_email AS email,
@@ -392,35 +416,16 @@ export function createIdentity(options: IdentityOptions) {
              AND users.state = 'active'`,
         )
         .bind(await hashToken(token), occurredAt, occurredAt)
-        .first<User & { sessionId: string; lastSeenAt: number; absoluteExpiresAt: number }>();
+        .first<User & { csrfToken: string; absoluteExpiresAt: number }>();
       if (!record) {
         return { ok: false, kind: "invalid-credentials" };
       }
-      const csrfToken = randomToken();
-      const shouldRefreshIdle = occurredAt - record.lastSeenAt >= 60 * 60 * 1_000;
-      await options.db
-        .prepare(
-          `UPDATE sessions
-           SET csrf_token_hash = ?,
-               last_seen_at = ?,
-               idle_expires_at = ?
-           WHERE id = ?`,
-        )
-        .bind(
-          await hashToken(csrfToken),
-          shouldRefreshIdle ? occurredAt : record.lastSeenAt,
-          shouldRefreshIdle
-            ? Math.min(occurredAt + idleSessionDuration, record.absoluteExpiresAt)
-            : Math.min(record.lastSeenAt + idleSessionDuration, record.absoluteExpiresAt),
-          record.sessionId,
-        )
-        .run();
       return {
         ok: true,
         kind: "session",
         session: {
           token,
-          csrfToken,
+          csrfToken: record.csrfToken,
           expiresAt: new Date(record.absoluteExpiresAt),
           user: toUser(record),
         },
@@ -634,10 +639,18 @@ export function createIdentity(options: IdentityOptions) {
     },
 
     async changeRole(
-      input: Readonly<{ actorId: string; userId: string; role: UserRole }>,
+      input: Readonly<{
+        actorId: string;
+        userId: string;
+        role: UserRole;
+        recentlyAuthenticated: boolean;
+      }>,
     ): Promise<
       | Readonly<{ ok: true; kind: "role-changed" | "unchanged" }>
-      | Readonly<{ ok: false; kind: "user-not-found" | "last-active-administrator" }>
+      | Readonly<{
+          ok: false;
+          kind: "user-not-found" | "last-active-administrator" | "reauthentication-required";
+        }>
     > {
       const stored = await findUser(options.db, input.userId);
       if (!stored || stored.state === "invited") {
@@ -649,6 +662,10 @@ export function createIdentity(options: IdentityOptions) {
 
       const occurredAt = now().getTime();
       const guard = `id = ? AND role = ? AND state IN ('active', 'suspended')
+        AND (
+          ? = 1
+          OR (? != 'administrator' AND role != 'administrator')
+        )
         AND NOT (
           state = 'active'
           AND role = 'administrator'
@@ -674,11 +691,21 @@ export function createIdentity(options: IdentityOptions) {
             metadata,
             input.userId,
             stored.role,
+            input.recentlyAuthenticated ? 1 : 0,
+            input.role,
             input.role,
           ),
         options.db
           .prepare(`UPDATE users SET role = ?, updated_at = ? WHERE ${guard}`)
-          .bind(input.role, occurredAt, input.userId, stored.role, input.role),
+          .bind(
+            input.role,
+            occurredAt,
+            input.userId,
+            stored.role,
+            input.recentlyAuthenticated ? 1 : 0,
+            input.role,
+            input.role,
+          ),
         options.db
           .prepare(
             `DELETE FROM sessions
@@ -690,6 +717,13 @@ export function createIdentity(options: IdentityOptions) {
       if ((results[1]?.meta.changes ?? 0) > 0) {
         return { ok: true, kind: "role-changed" };
       }
+      const current = await findUser(options.db, input.userId);
+      if (
+        !input.recentlyAuthenticated &&
+        (input.role === "administrator" || current?.role === "administrator")
+      ) {
+        return { ok: false, kind: "reauthentication-required" };
+      }
       return {
         ok: false,
         kind:
@@ -700,10 +734,17 @@ export function createIdentity(options: IdentityOptions) {
     },
 
     async suspendUser(
-      input: Readonly<{ actorId: string; userId: string }>,
+      input: Readonly<{
+        actorId: string;
+        userId: string;
+        recentlyAuthenticated: boolean;
+      }>,
     ): Promise<
       | Readonly<{ ok: true; kind: "user-suspended" }>
-      | Readonly<{ ok: false; kind: "user-not-found" | "last-active-administrator" }>
+      | Readonly<{
+          ok: false;
+          kind: "user-not-found" | "last-active-administrator" | "reauthentication-required";
+        }>
     > {
       const stored = await findUser(options.db, input.userId);
       if (!stored || stored.state !== "active") {
@@ -711,6 +752,7 @@ export function createIdentity(options: IdentityOptions) {
       }
       const occurredAt = now().getTime();
       const guard = `id = ? AND state = 'active'
+        AND (? = 1 OR role != 'administrator')
         AND NOT (
           role = 'administrator'
           AND (
@@ -730,10 +772,17 @@ export function createIdentity(options: IdentityOptions) {
              SELECT ?, ?, 'user-suspend', id, ?, ?
              FROM users WHERE ${guard}`,
           )
-          .bind(randomId(), input.actorId, occurredAt, metadata, input.userId),
+          .bind(
+            randomId(),
+            input.actorId,
+            occurredAt,
+            metadata,
+            input.userId,
+            input.recentlyAuthenticated ? 1 : 0,
+          ),
         options.db
           .prepare(`UPDATE users SET state = 'suspended', updated_at = ? WHERE ${guard}`)
-          .bind(occurredAt, input.userId),
+          .bind(occurredAt, input.userId, input.recentlyAuthenticated ? 1 : 0),
         options.db
           .prepare(
             `DELETE FROM sessions
@@ -744,6 +793,10 @@ export function createIdentity(options: IdentityOptions) {
       ]);
       if ((results[1]?.meta.changes ?? 0) > 0) {
         return { ok: true, kind: "user-suspended" };
+      }
+      const current = await findUser(options.db, input.userId);
+      if (!input.recentlyAuthenticated && current?.role === "administrator") {
+        return { ok: false, kind: "reauthentication-required" };
       }
       return {
         ok: false,
@@ -919,7 +972,10 @@ export function createIdentity(options: IdentityOptions) {
         )
         .bind(await hashToken(input.token), occurredAt, occurredAt)
         .first<User & { sessionId: string; absoluteExpiresAt: number; verifier: string }>();
-      if (!record || !(await verifyPassword(input.password, record.verifier))) {
+      const verification = record
+        ? await verifyPassword(input.password, record.verifier)
+        : undefined;
+      if (!record || !verification?.valid) {
         return { ok: false, kind: "invalid-credentials" };
       }
 
@@ -928,13 +984,13 @@ export function createIdentity(options: IdentityOptions) {
       await options.db
         .prepare(
           `UPDATE sessions
-           SET token_hash = ?, csrf_token_hash = ?, last_seen_at = ?,
+           SET token_hash = ?, csrf_token = ?, last_seen_at = ?,
                idle_expires_at = ?, recent_authentication_at = ?
            WHERE id = ?`,
         )
         .bind(
           await hashToken(token),
-          await hashToken(csrfToken),
+          csrfToken,
           occurredAt,
           Math.min(occurredAt + idleSessionDuration, record.absoluteExpiresAt),
           occurredAt,
@@ -970,7 +1026,10 @@ export function createIdentity(options: IdentityOptions) {
         )
         .bind(input.userId)
         .first<User & { verifier: string }>();
-      if (!record || !(await verifyPassword(input.currentPassword, record.verifier))) {
+      const verification = record
+        ? await verifyPassword(input.currentPassword, record.verifier)
+        : undefined;
+      if (!record || !verification?.valid) {
         return { ok: false, kind: "invalid-credentials" };
       }
       const verifier = await createPasswordVerifier(input.password);
@@ -1117,10 +1176,22 @@ export function createIdentity(options: IdentityOptions) {
 
 function parseUserEmail(value: string) {
   const display = value.trim();
+  const at = display.indexOf("@");
+  const localPart = at >= 0 ? display.slice(0, at) : "";
+  const domain = at >= 0 ? display.slice(at + 1) : "";
   if (
     display.length < 3 ||
     display.length > 254 ||
-    !/^[\x21-\x7e]+@[A-Za-z0-9.-]+$/.test(display)
+    at !== display.lastIndexOf("@") ||
+    localPart.length < 1 ||
+    localPart.length > 64 ||
+    localPart.startsWith(".") ||
+    localPart.endsWith(".") ||
+    localPart.includes("..") ||
+    !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(localPart) ||
+    !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.test(
+      domain,
+    )
   ) {
     return undefined;
   }
@@ -1130,44 +1201,6 @@ function parseUserEmail(value: string) {
 async function hashToken(token: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function createPasswordVerifier(password: string) {
-  const normalized = password.normalize("NFC");
-  const length = Array.from(normalized).length;
-  if (length < 15 || length > 128 || blockedPasswords.has(normalized)) {
-    return undefined;
-  }
-
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const tag = await scryptAsync(new TextEncoder().encode(normalized), salt);
-  const parameters = `N=${scryptPolicy.N},r=${scryptPolicy.r},p=${scryptPolicy.p},l=${scryptPolicy.outputLength}`;
-  return `scrypt$v=1$${parameters}$${Buffer.from(salt).toString("base64url")}$${Buffer.from(tag).toString("base64url")}`;
-}
-
-async function verifyPassword(password: string, verifier: string) {
-  const parsed = parseVerifier(verifier);
-  if (!parsed) {
-    return false;
-  }
-  const normalized = password.normalize("NFC");
-  const actual = await scryptAsync(new TextEncoder().encode(normalized), parsed.salt);
-  return actual.length === parsed.tag.length && timingSafeEqual(actual, parsed.tag);
-}
-
-function parseVerifier(verifier: string) {
-  const match = /^scrypt\$v=1\$N=32768,r=8,p=1,l=32\$([A-Za-z0-9_-]+)\$([A-Za-z0-9_-]+)$/.exec(
-    verifier,
-  );
-  if (!match?.[1] || !match[2]) {
-    return undefined;
-  }
-  const salt = Buffer.from(match[1], "base64url");
-  const tag = Buffer.from(match[2], "base64url");
-  if (salt.length !== 16 || tag.length !== scryptPolicy.outputLength) {
-    return undefined;
-  }
-  return { salt: new Uint8Array(salt), tag: new Uint8Array(tag) };
 }
 
 function createRandomToken() {
@@ -1191,27 +1224,4 @@ async function findUser(db: D1Database, userId: string) {
     )
     .bind(userId)
     .first<User>();
-}
-
-function scryptAsync(password: Uint8Array, salt: Uint8Array) {
-  return new Promise<Uint8Array>((resolve, reject) => {
-    scrypt(
-      password,
-      salt,
-      scryptPolicy.outputLength,
-      {
-        N: scryptPolicy.N,
-        r: scryptPolicy.r,
-        p: scryptPolicy.p,
-        maxmem: scryptPolicy.maxmem,
-      },
-      (error, derivedKey) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(new Uint8Array(derivedKey));
-        }
-      },
-    );
-  });
 }

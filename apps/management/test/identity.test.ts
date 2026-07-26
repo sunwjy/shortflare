@@ -1,4 +1,6 @@
 import { env } from "cloudflare:workers";
+import { Buffer } from "node:buffer";
+import { scrypt } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { createIdentity } from "../src/worker/identity";
@@ -98,6 +100,117 @@ describe("Identity", () => {
       kind: "user",
       user: result.session.user,
     });
+  });
+
+  it("keeps safe Session reads side-effect free while mutations extend idle expiry hourly", async () => {
+    let currentTime = now;
+    let nextId = 0;
+    const identity = createIdentity({
+      db: env.DB,
+      now: () => currentTime,
+      randomId: () => `generated-id-${++nextId}`,
+      randomToken: () => `generated-token-${++nextId}`,
+    });
+    await identity.writeInitialSetup({
+      displayEmail: "Admin@Example.com",
+      token: "setup-secret",
+      expiresAt: new Date(now.getTime() + 30 * 60 * 1_000),
+    });
+    await identity.completeInitialSetup({
+      token: "setup-secret",
+      password: "violet glacier orbits quietly 729",
+    });
+    const login = await identity.login({
+      email: "admin@example.com",
+      password: "violet glacier orbits quietly 729",
+    });
+    if (!login.ok) {
+      throw new Error("Expected login to succeed");
+    }
+    const beforeRead = await readSessionTimes();
+
+    const opened = await identity.openSession(login.session.token);
+
+    expect(opened).toMatchObject({
+      ok: true,
+      session: { csrfToken: login.session.csrfToken },
+    });
+    await expect(readSessionTimes()).resolves.toEqual(beforeRead);
+
+    currentTime = new Date(now.getTime() + 60 * 60 * 1_000);
+    await expect(
+      identity.authenticateRequest(login.session.token, login.session.csrfToken),
+    ).resolves.toMatchObject({ ok: true, kind: "user" });
+    const afterFirstMutation = await readSessionTimes();
+    expect(afterFirstMutation.lastSeenAt).toBe(currentTime.getTime());
+
+    currentTime = new Date(now.getTime() + 90 * 60 * 1_000);
+    await expect(
+      identity.authenticateRequest(login.session.token, login.session.csrfToken),
+    ).resolves.toMatchObject({ ok: true, kind: "user" });
+    await expect(readSessionTimes()).resolves.toEqual(afterFirstMutation);
+
+    currentTime = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1_000 + 30 * 60 * 1_000);
+    await expect(identity.authenticate(login.session.token)).resolves.toMatchObject({
+      ok: true,
+      kind: "user",
+    });
+  });
+
+  it("rehashes a whitelisted legacy scrypt verifier after successful login", async () => {
+    const identity = createIdentity({ db: env.DB, now: () => now });
+    await identity.writeInitialSetup({
+      displayEmail: "Admin@Example.com",
+      token: "setup-secret",
+      expiresAt: new Date(now.getTime() + 30 * 60 * 1_000),
+    });
+    const setup = await identity.completeInitialSetup({
+      token: "setup-secret",
+      password: "violet glacier orbits quietly 729",
+    });
+    if (!setup.ok) {
+      throw new Error("Expected setup to succeed");
+    }
+    const legacyVerifier = await createLegacyVerifier("violet glacier orbits quietly 729");
+    await env.DB.prepare("UPDATE credentials SET verifier = ? WHERE user_id = ?")
+      .bind(legacyVerifier, setup.user.id)
+      .run();
+
+    await expect(
+      identity.login({
+        email: "admin@example.com",
+        password: "violet glacier orbits quietly 729",
+      }),
+    ).resolves.toMatchObject({ ok: true, kind: "session" });
+
+    const credential = await env.DB.prepare("SELECT verifier FROM credentials WHERE user_id = ?")
+      .bind(setup.user.id)
+      .first<{ verifier: string }>();
+    expect(credential?.verifier).toContain("$N=32768,r=8,p=1,l=32$");
+  });
+
+  it("rejects malformed ASCII email addresses", async () => {
+    const identity = createIdentity({ db: env.DB, now: () => now });
+
+    await Promise.all(
+      [
+        "a@.",
+        "a@-",
+        "two@@example.com",
+        "missing-tld@example",
+        ".a@example.com",
+        "a..b@example.com",
+        `${"a".repeat(65)}@example.com`,
+      ].map((email) =>
+        expect(
+          identity.issueInvitation({
+            actorId: "administrator",
+            email,
+            role: "member",
+          }),
+        ).resolves.toEqual({ ok: false, kind: "invalid-email" }),
+      ),
+    );
   });
 
   it("activates an Invited User who can then log in as a Member", async () => {
@@ -267,6 +380,7 @@ describe("Identity", () => {
         actorId: setup.user.id,
         userId: member.user.id,
         role: "viewer",
+        recentlyAuthenticated: true,
       }),
     ).resolves.toEqual({ ok: true, kind: "role-changed" });
     await expect(identity.authenticate(login.session.token)).resolves.toEqual({
@@ -274,7 +388,11 @@ describe("Identity", () => {
       kind: "invalid-credentials",
     });
     await expect(
-      identity.suspendUser({ actorId: setup.user.id, userId: member.user.id }),
+      identity.suspendUser({
+        actorId: setup.user.id,
+        userId: member.user.id,
+        recentlyAuthenticated: true,
+      }),
     ).resolves.toEqual({ ok: true, kind: "user-suspended" });
     await expect(
       identity.reactivateUser({ actorId: setup.user.id, userId: member.user.id }),
@@ -288,6 +406,7 @@ describe("Identity", () => {
         actorId: setup.user.id,
         userId: setup.user.id,
         role: "member",
+        recentlyAuthenticated: true,
       }),
     ).resolves.toEqual({ ok: false, kind: "last-active-administrator" });
   });
@@ -493,3 +612,38 @@ describe("Identity", () => {
     ).rejects.toThrow("Initial setup is permanently closed");
   });
 });
+
+async function readSessionTimes() {
+  const row = await env.DB.prepare(
+    "SELECT last_seen_at AS lastSeenAt, idle_expires_at AS idleExpiresAt FROM sessions",
+  ).first<{ lastSeenAt: number; idleExpiresAt: number }>();
+  if (!row) {
+    throw new Error("Expected Session to exist");
+  }
+  return row;
+}
+
+async function createLegacyVerifier(password: string) {
+  const salt = new Uint8Array(16).fill(7);
+  const derived = await new Promise<Buffer>((resolve, reject) => {
+    scrypt(
+      password.normalize("NFC"),
+      salt,
+      32,
+      {
+        N: 16_384,
+        r: 8,
+        p: 1,
+        maxmem: 32 * 1_024 * 1_024,
+      },
+      (error, value) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(value);
+        }
+      },
+    );
+  });
+  return `scrypt$v=1$N=16384,r=8,p=1,l=32$${Buffer.from(salt).toString("base64url")}$${derived.toString("base64url")}`;
+}

@@ -10,6 +10,9 @@ describe("management worker", () => {
       env.DB.prepare("DELETE FROM audit_events"),
       env.DB.prepare("DELETE FROM sessions"),
       env.DB.prepare("DELETE FROM credentials"),
+      env.DB.prepare("DELETE FROM invitations"),
+      env.DB.prepare("DELETE FROM password_resets"),
+      env.DB.prepare("DELETE FROM operator_recovery"),
       env.DB.prepare("DELETE FROM users"),
       env.DB.prepare("DELETE FROM initial_setup"),
       env.DB.prepare("DELETE FROM destination_versions"),
@@ -197,7 +200,7 @@ describe("management worker", () => {
     expect(await response.json()).toEqual({ ok: false, kind: "forbidden" });
   });
 
-  it("refreshes CSRF through the current Session and logs out that Session", async () => {
+  it("reads the current Session without rotating CSRF and logs out that Session", async () => {
     const authentication = await loginAdministrator();
     const sessionResponse = await app.request(
       "https://management.test/api/internal/auth/session",
@@ -206,6 +209,7 @@ describe("management worker", () => {
     );
     expect(sessionResponse.status).toBe(200);
     const sessionBody = (await sessionResponse.json()) as { csrfToken: string };
+    expect(sessionBody.csrfToken).toBe(authentication.csrfToken);
 
     const logoutResponse = await app.request(
       "https://management.test/api/internal/auth/logout",
@@ -239,6 +243,155 @@ describe("management worker", () => {
       env,
     );
     expect(response.status).toBe(401);
+  });
+
+  it("requires recent authentication only when suspending an Administrator", async () => {
+    const administrator = await loginAdministrator();
+    const administratorRecord = await env.DB.prepare(
+      "SELECT id FROM users WHERE role = 'administrator'",
+    ).first<{ id: string }>();
+    if (!administratorRecord) {
+      throw new Error("Expected Administrator");
+    }
+    const identity = createIdentity({ db: env.DB });
+    const invitation = await identity.issueInvitation({
+      actorId: administratorRecord.id,
+      email: "Member@Example.com",
+      role: "member",
+    });
+    if (!invitation.ok) {
+      throw new Error("Expected invitation");
+    }
+    const member = await identity.acceptInvitation({
+      token: invitation.invitation.token,
+      password: "crimson satellites wander afar 286",
+    });
+    if (!member.ok) {
+      throw new Error("Expected Member");
+    }
+    const staleAuthentication = Date.now() - 11 * 60 * 1_000;
+    await env.DB.prepare("UPDATE sessions SET created_at = ?, recent_authentication_at = ?")
+      .bind(staleAuthentication, staleAuthentication)
+      .run();
+
+    const roleResponse = await app.request(
+      `https://management.test/api/internal/users/${member.user.id}/role`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(administrator),
+        body: JSON.stringify({ role: "viewer" }),
+      },
+      env,
+    );
+    expect(roleResponse.status).toBe(200);
+
+    const memberResponse = await app.request(
+      `https://management.test/api/internal/users/${member.user.id}/suspend`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(administrator),
+        body: "{}",
+      },
+      env,
+    );
+    expect(memberResponse.status).toBe(200);
+
+    const administratorInvitation = await identity.issueInvitation({
+      actorId: administratorRecord.id,
+      email: "SecondAdmin@Example.com",
+      role: "administrator",
+    });
+    if (!administratorInvitation.ok) {
+      throw new Error("Expected Administrator invitation");
+    }
+    const secondAdministrator = await identity.acceptInvitation({
+      token: administratorInvitation.invitation.token,
+      password: "amber satellites wander afar 492",
+    });
+    if (!secondAdministrator.ok) {
+      throw new Error("Expected second Administrator");
+    }
+
+    const response = await app.request(
+      `https://management.test/api/internal/users/${secondAdministrator.user.id}/suspend`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(administrator),
+        body: "{}",
+      },
+      env,
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "reauthentication-required",
+    });
+    await expect(identity.getUser(secondAdministrator.user.id)).resolves.toMatchObject({
+      state: "active",
+    });
+  });
+
+  it("requires recent authentication when granting Administrator", async () => {
+    const administrator = await loginAdministrator();
+    const administratorRecord = await env.DB.prepare(
+      "SELECT id FROM users WHERE role = 'administrator'",
+    ).first<{ id: string }>();
+    if (!administratorRecord) {
+      throw new Error("Expected Administrator");
+    }
+    const identity = createIdentity({ db: env.DB });
+    const invitation = await identity.issueInvitation({
+      actorId: administratorRecord.id,
+      email: "Member@Example.com",
+      role: "member",
+    });
+    if (!invitation.ok) {
+      throw new Error("Expected invitation");
+    }
+    const member = await identity.acceptInvitation({
+      token: invitation.invitation.token,
+      password: "crimson satellites wander afar 286",
+    });
+    if (!member.ok) {
+      throw new Error("Expected Member");
+    }
+    const staleAuthentication = Date.now() - 11 * 60 * 1_000;
+    await env.DB.prepare("UPDATE sessions SET created_at = ?, recent_authentication_at = ?")
+      .bind(staleAuthentication, staleAuthentication)
+      .run();
+
+    const response = await app.request(
+      `https://management.test/api/internal/users/${member.user.id}/role`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(administrator),
+        body: JSON.stringify({ role: "administrator" }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "reauthentication-required",
+    });
+    await expect(identity.getUser(member.user.id)).resolves.toMatchObject({ role: "member" });
+
+    const resetResponse = await app.request(
+      `https://management.test/api/internal/users/${member.user.id}/password-resets`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(administrator),
+        body: "{}",
+      },
+      env,
+    );
+    expect(resetResponse.status).toBe(403);
+    expect(await resetResponse.json()).toEqual({
+      ok: false,
+      kind: "reauthentication-required",
+    });
   });
 
   it("creates a Link as an authenticated Administrator", async () => {

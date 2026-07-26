@@ -4,6 +4,7 @@ import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 
+import { type Capability, hasCapability } from "./authorization";
 import { createIdentity, type User } from "./identity";
 
 const healthResponse = z.object({ status: z.literal("ok") });
@@ -222,7 +223,7 @@ app.post("/api/internal/users/invitations", async (context) => {
     return context.json({ ok: false, kind: "invalid-request" } as const, 400);
   }
   const authenticated = await authenticateMutation(context, {
-    administrator: true,
+    capability: "manage-users",
     recent: request.role === "administrator",
   });
   if ("response" in authenticated) {
@@ -237,7 +238,7 @@ app.post("/api/internal/users/invitations", async (context) => {
 });
 
 app.get("/api/internal/users", async (context) => {
-  const authenticated = await authenticateSafe(context, true);
+  const authenticated = await authenticateSafe(context, "view-users");
   if ("response" in authenticated) {
     return authenticated.response;
   }
@@ -245,7 +246,7 @@ app.get("/api/internal/users", async (context) => {
 });
 
 app.post("/api/internal/users/:userId/cancel-invitation", async (context) => {
-  const authenticated = await authenticateMutation(context, { administrator: true });
+  const authenticated = await authenticateMutation(context, { capability: "manage-users" });
   if ("response" in authenticated) {
     return authenticated.response;
   }
@@ -262,7 +263,7 @@ app.post("/api/internal/users/:userId/cancel-invitation", async (context) => {
 
 app.post("/api/internal/users/:userId/password-resets", async (context) => {
   const authenticated = await authenticateMutation(context, {
-    administrator: true,
+    capability: "manage-users",
     recent: true,
   });
   if ("response" in authenticated) {
@@ -284,10 +285,9 @@ app.post("/api/internal/users/:userId/role", async (context) => {
   if (!request) {
     return context.json({ ok: false, kind: "invalid-request" } as const, 400);
   }
-  const identity = createIdentity({ db: context.env.DB });
-  const target = await identity.getUser(context.req.param("userId"));
-  const recent = request.role === "administrator" || target?.role === "administrator";
-  const authenticated = await authenticateMutation(context, { administrator: true, recent });
+  const authenticated = await authenticateMutation(context, {
+    capability: "manage-users",
+  });
   if ("response" in authenticated) {
     return authenticated.response;
   }
@@ -295,16 +295,23 @@ app.post("/api/internal/users/:userId/role", async (context) => {
     actorId: authenticated.user.id,
     userId: context.req.param("userId"),
     role: request.role,
+    recentlyAuthenticated: authenticated.recentlyAuthenticated,
   });
-  return context.json(result, result.ok ? 200 : result.kind === "user-not-found" ? 404 : 409);
+  return context.json(
+    result,
+    result.ok
+      ? 200
+      : result.kind === "user-not-found"
+        ? 404
+        : result.kind === "reauthentication-required"
+          ? 403
+          : 409,
+  );
 });
 
 app.post("/api/internal/users/:userId/suspend", async (context) => {
-  const identity = createIdentity({ db: context.env.DB });
-  const target = await identity.getUser(context.req.param("userId"));
   const authenticated = await authenticateMutation(context, {
-    administrator: true,
-    recent: target?.role === "administrator",
+    capability: "manage-users",
   });
   if ("response" in authenticated) {
     return authenticated.response;
@@ -316,12 +323,22 @@ app.post("/api/internal/users/:userId/suspend", async (context) => {
   const result = await authenticated.identity.suspendUser({
     actorId: authenticated.user.id,
     userId: context.req.param("userId"),
+    recentlyAuthenticated: authenticated.recentlyAuthenticated,
   });
-  return context.json(result, result.ok ? 200 : result.kind === "user-not-found" ? 404 : 409);
+  return context.json(
+    result,
+    result.ok
+      ? 200
+      : result.kind === "user-not-found"
+        ? 404
+        : result.kind === "reauthentication-required"
+          ? 403
+          : 409,
+  );
 });
 
 app.post("/api/internal/users/:userId/reactivate", async (context) => {
-  const authenticated = await authenticateMutation(context, { administrator: true });
+  const authenticated = await authenticateMutation(context, { capability: "manage-users" });
   if ("response" in authenticated) {
     return authenticated.response;
   }
@@ -337,24 +354,9 @@ app.post("/api/internal/users/:userId/reactivate", async (context) => {
 });
 
 app.post("/api/internal/links", async (context) => {
-  if (!isSameOriginJsonRequest(context.req.raw)) {
-    return context.json({ ok: false, kind: "forbidden" } as const, 403);
-  }
-  const sessionToken = getCookie(context, "__Host-shortflare_session");
-  if (!sessionToken) {
-    return context.json({ ok: false, kind: "unauthenticated" } as const, 401);
-  }
-  const authentication = await createIdentity({ db: context.env.DB }).authenticateRequest(
-    sessionToken,
-    context.req.header("x-csrf-token") ?? "",
-  );
-  if (!authentication.ok) {
-    const status = authentication.kind === "invalid-credentials" ? 401 : 403;
-    const kind = status === 401 ? "unauthenticated" : "invalid-csrf-token";
-    return context.json({ ok: false, kind }, status);
-  }
-  if (authentication.user.role === "viewer") {
-    return context.json({ ok: false, kind: "forbidden" } as const, 403);
+  const authenticated = await authenticateMutation(context, { capability: "create-link" });
+  if ("response" in authenticated) {
+    return authenticated.response;
   }
 
   const request = await parseJson(context.req.raw, createLinkRequest);
@@ -366,10 +368,7 @@ app.post("/api/internal/links", async (context) => {
     persistence: createD1LinksPersistence(context.env.DB),
     redirectDomain: context.env.REDIRECT_DOMAIN,
   });
-  const result = await links.execute(
-    { kind: "create", ...request },
-    { id: authentication.user.id },
-  );
+  const result = await links.execute({ kind: "create", ...request }, { id: authenticated.user.id });
   if (result.ok) {
     return context.json(result, 201);
   }
@@ -420,12 +419,13 @@ function setSessionCookie(
 
 async function authenticateMutation(
   context: Context<AppEnvironment>,
-  requirements: Readonly<{ administrator?: boolean; recent?: boolean }> = {},
+  requirements: Readonly<{ capability?: Capability; recent?: boolean }> = {},
 ): Promise<
   | Readonly<{
       identity: ReturnType<typeof createIdentity>;
       user: User;
       sessionToken: string;
+      recentlyAuthenticated: boolean;
     }>
   | Readonly<{ response: Response }>
 > {
@@ -458,17 +458,22 @@ async function authenticateMutation(
       ),
     };
   }
-  if (requirements.administrator && authentication.user.role !== "administrator") {
+  if (requirements.capability && !hasCapability(authentication.user, requirements.capability)) {
     return {
       response: context.json({ ok: false, kind: "forbidden" } as const, 403),
     };
   }
-  return { identity, user: authentication.user, sessionToken };
+  return {
+    identity,
+    user: authentication.user,
+    sessionToken,
+    recentlyAuthenticated: authentication.recentlyAuthenticated,
+  };
 }
 
 async function authenticateSafe(
   context: Context<AppEnvironment>,
-  administrator = false,
+  capability?: Capability,
 ): Promise<
   | Readonly<{ identity: ReturnType<typeof createIdentity>; user: User }>
   | Readonly<{ response: Response }>
@@ -486,7 +491,7 @@ async function authenticateSafe(
       response: context.json({ ok: false, kind: "unauthenticated" } as const, 401),
     };
   }
-  if (administrator && authentication.user.role !== "administrator") {
+  if (capability && !hasCapability(authentication.user, capability)) {
     return {
       response: context.json({ ok: false, kind: "forbidden" } as const, 403),
     };
