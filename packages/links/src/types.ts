@@ -1,6 +1,4 @@
-declare const aliasBrand: unique symbol;
-
-export type Alias = string & { readonly [aliasBrand]: true };
+export type Alias = string & { readonly __aliasBrand: "Alias" };
 
 export type Actor = Readonly<{
   id: string;
@@ -20,6 +18,16 @@ export type Link = Readonly<{
   title: string;
   state: LinkState;
   destinationVersions: readonly DestinationVersion[];
+  createdAt: Date;
+  updatedAt: Date;
+}>;
+
+export type LinkSummary = Readonly<{
+  id: string;
+  alias: Alias;
+  title: string;
+  state: LinkState;
+  currentDestinationVersion: DestinationVersion;
   createdAt: Date;
   updatedAt: Date;
 }>;
@@ -104,7 +112,7 @@ export type LinkResult =
   | Readonly<{
       ok: false;
       kind: "invalid-destination";
-      reason: "malformed" | "unsupported-protocol" | "credentials" | "redirect-loop";
+      reason: "malformed" | "unsupported-protocol" | "credentials" | "redirect-loop" | "too-long";
     }>
   | Readonly<{
       ok: false;
@@ -148,13 +156,14 @@ export type LinkQuery =
     }>;
 
 export type LinkPage = Readonly<{
-  items: readonly Link[];
+  items: readonly LinkSummary[];
   nextCursor: string | null;
 }>;
 
 export type LinkQueryResult =
   | Readonly<{ ok: true; kind: "detail"; link: Link }>
   | Readonly<{ ok: true; kind: "page"; page: LinkPage }>
+  | Readonly<{ ok: false; kind: "invalid-cursor" }>
   | Readonly<{
       ok: false;
       kind: "link-not-found";
@@ -165,7 +174,10 @@ export type PersistenceListQuery = Readonly<{
   search: string;
   states: readonly LinkState[];
   limit: number;
-  cursor?: string;
+  cursor?: Readonly<{
+    updatedAt: Date;
+    id: string;
+  }>;
 }>;
 
 export type LinkMutationContext = Readonly<{

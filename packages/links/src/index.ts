@@ -12,6 +12,7 @@ export type {
   LinkQuery,
   LinkQueryResult,
   LinkResult,
+  LinkSummary,
   Links,
   LinksPersistence,
   LinkState,
@@ -19,4 +20,4 @@ export type {
   RedirectDecision,
   ReservedAlias,
 } from "./types";
-export { parseAlias } from "./values";
+export { encodeListCursor, foldCase, parseAlias } from "./values";

@@ -1,0 +1,186 @@
+import { sql } from "drizzle-orm";
+import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+
+const idCheck = (column: { getSQL(): unknown }) => sql`length(${column}) BETWEEN 1 AND 128`;
+const timestampCheck = (column: { getSQL(): unknown }) =>
+  sql`typeof(${column}) = 'integer' AND ${column} >= 0`;
+
+export const instances = sqliteTable(
+  "instances",
+  {
+    singletonKey: integer("singleton_key").primaryKey(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    check(
+      "instances_singleton_key_check",
+      sql`typeof(${table.singletonKey}) = 'integer'
+          AND ${table.singletonKey} = 1`,
+    ),
+    check("instances_created_at_check", timestampCheck(table.createdAt)),
+  ],
+);
+
+export const links = sqliteTable(
+  "links",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    searchTitle: text("search_title").notNull(),
+    state: text("state", {
+      enum: ["active", "disabled", "archived"],
+    }).notNull(),
+    revision: integer("revision").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    check("links_id_check", idCheck(table.id)),
+    check("links_title_check", sql`length(${table.title}) BETWEEN 1 AND 200`),
+    check("links_search_title_check", sql`length(${table.searchTitle}) BETWEEN 1 AND 2048`),
+    check("links_state_check", sql`${table.state} IN ('active', 'disabled', 'archived')`),
+    check(
+      "links_revision_check",
+      sql`typeof(${table.revision}) = 'integer' AND ${table.revision} >= 0`,
+    ),
+    check("links_created_at_check", timestampCheck(table.createdAt)),
+    check("links_updated_at_check", timestampCheck(table.updatedAt)),
+    check("links_timestamp_order_check", sql`${table.updatedAt} >= ${table.createdAt}`),
+    index("links_list_order_idx").on(table.updatedAt, table.id),
+    index("links_search_title_idx").on(table.searchTitle),
+  ],
+);
+
+export const aliases = sqliteTable(
+  "aliases",
+  {
+    alias: text("alias").primaryKey(),
+    searchAlias: text("search_alias").notNull(),
+    linkId: text("link_id").references(() => links.id, {
+      onDelete: "restrict",
+    }),
+    deletedLinkId: text("deleted_link_id"),
+    reservedAt: integer("reserved_at", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    check(
+      "aliases_value_check",
+      sql`length(${table.alias}) BETWEEN 1 AND 64
+          AND ${table.alias} NOT GLOB '*[^A-Za-z0-9_-]*'`,
+    ),
+    check(
+      "aliases_shape_check",
+      sql`(
+        ${table.linkId} IS NOT NULL
+        AND ${table.deletedLinkId} IS NULL
+        AND ${table.reservedAt} IS NULL
+      ) OR (
+        ${table.linkId} IS NULL
+        AND ${table.deletedLinkId} IS NOT NULL
+        AND ${table.reservedAt} IS NOT NULL
+      )`,
+    ),
+    check("aliases_search_value_check", sql`length(${table.searchAlias}) BETWEEN 1 AND 64`),
+    check(
+      "aliases_deleted_link_id_check",
+      sql`${table.deletedLinkId} IS NULL
+          OR length(${table.deletedLinkId}) BETWEEN 1 AND 128`,
+    ),
+    check(
+      "aliases_reserved_at_check",
+      sql`${table.reservedAt} IS NULL
+          OR (
+            typeof(${table.reservedAt}) = 'integer'
+            AND ${table.reservedAt} >= 0
+          )`,
+    ),
+    uniqueIndex("aliases_link_id_unique").on(table.linkId),
+    index("aliases_search_alias_idx").on(table.searchAlias),
+  ],
+);
+
+export const destinationVersions = sqliteTable(
+  "destination_versions",
+  {
+    id: text("id").primaryKey(),
+    linkId: text("link_id")
+      .notNull()
+      .references(() => links.id, { onDelete: "cascade" }),
+    versionNumber: integer("version_number").notNull(),
+    destination: text("destination").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    check("destination_versions_id_check", idCheck(table.id)),
+    check(
+      "destination_versions_number_check",
+      sql`typeof(${table.versionNumber}) = 'integer'
+          AND ${table.versionNumber} > 0`,
+    ),
+    check(
+      "destination_versions_destination_check",
+      sql`length(${table.destination}) BETWEEN 1 AND 8192`,
+    ),
+    check("destination_versions_created_at_check", timestampCheck(table.createdAt)),
+    uniqueIndex("destination_versions_link_number_unique").on(table.linkId, table.versionNumber),
+    index("destination_versions_latest_idx").on(table.linkId, table.versionNumber),
+  ],
+);
+
+export type AuditMetadata = Readonly<{
+  alias?: string;
+  fromState?: "active" | "disabled" | "archived";
+  toState?: "active" | "disabled" | "archived";
+  destinationVersionId?: string;
+}>;
+
+export const auditEvents = sqliteTable(
+  "audit_events",
+  {
+    id: text("id").primaryKey(),
+    actorId: text("actor_id").notNull(),
+    action: text("action", {
+      enum: [
+        "create",
+        "update-destination",
+        "update-title",
+        "activate",
+        "disable",
+        "archive",
+        "restore",
+        "permanently-delete",
+        "release-alias",
+      ],
+    }).notNull(),
+    subjectId: text("subject_id").notNull(),
+    occurredAt: integer("occurred_at", { mode: "timestamp_ms" }).notNull(),
+    metadata: text("metadata", { mode: "json" }).$type<AuditMetadata>().notNull().default({}),
+  },
+  (table) => [
+    check("audit_events_id_check", idCheck(table.id)),
+    check("audit_events_actor_id_check", sql`length(${table.actorId}) BETWEEN 1 AND 128`),
+    check(
+      "audit_events_action_check",
+      sql`${table.action} IN (
+        'create',
+        'update-destination',
+        'update-title',
+        'activate',
+        'disable',
+        'archive',
+        'restore',
+        'permanently-delete',
+        'release-alias'
+      )`,
+    ),
+    check("audit_events_subject_id_check", sql`length(${table.subjectId}) BETWEEN 1 AND 128`),
+    check("audit_events_occurred_at_check", timestampCheck(table.occurredAt)),
+    check(
+      "audit_events_metadata_check",
+      sql`json_valid(${table.metadata})
+          AND length(${table.metadata}) <= 2048`,
+    ),
+    index("audit_events_occurred_at_idx").on(table.occurredAt),
+    index("audit_events_subject_idx").on(table.subjectId, table.occurredAt),
+  ],
+);
