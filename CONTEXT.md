@@ -40,6 +40,14 @@ _Avoid_: Editor
 A User who can view analytics without changing Links, Users, or Instance settings.
 _Avoid_: Read-only member
 
+**Actor**:
+A User or the Shortflare system identified as responsible for a successful administrative command.
+_Avoid_: Principal
+
+**System Actor**:
+The Shortflare system acting without a User session, identified explicitly rather than represented as a fake User.
+_Avoid_: Service User, fake User
+
 **Link**:
 A stable short path whose destination and analytics history continue across destination changes.
 _Avoid_: Short URL, redirect

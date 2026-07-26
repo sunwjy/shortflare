@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@shortflare/database": "workspace:*",
+    "@shortflare/links": "workspace:*",
     "hono": "catalog:"
   },
   "devDependencies": {

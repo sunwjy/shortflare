@@ -3,6 +3,9 @@
   "name": "shortflare-management",
   "main": "./src/worker/index.ts",
   "compatibility_date": "2026-07-19",
+  "vars": {
+    "REDIRECT_DOMAIN": "short.localhost",
+  },
   "d1_databases": [
     {
       "binding": "DB",

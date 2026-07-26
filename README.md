@@ -64,8 +64,26 @@ Apply the versioned migrations to the local D1 database with:
 pnpm --filter @shortflare/management db:migrate:local
 ```
 
-The Redirect Worker integration suite builds both Workers and verifies the local
-Redirect Worker → Queue → Management Worker → shared D1 flow:
+During local development, Management exposes a temporary Link creation endpoint
+for the first end-to-end vertical slice. Use the Management URL printed by
+Vite:
+
+```sh
+curl --request POST "$MANAGEMENT_URL/api/internal/links" \
+  --header "content-type: application/json" \
+  --data '{
+    "alias": "Docs",
+    "title": "Documentation",
+    "destination": "https://example.com/guide"
+  }'
+```
+
+The endpoint is included only in Vite development mode. Production builds
+return `404`, and the endpoint will be removed when authenticated management
+operations replace it.
+
+The Redirect integration suite verifies the local Management HTTP → shared D1
+→ Redirect HTTP flow:
 
 ```sh
 pnpm --filter @shortflare/redirect-worker test
