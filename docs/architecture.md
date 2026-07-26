@@ -190,7 +190,11 @@ Authentication, Users, roles, sessions, audit browsing, and Instance settings
 remain inside `apps/management`. They have one runtime caller and one D1
 implementation, so separate workspace packages or hypothetical external seams
 would add indirection without leverage. Tests use local D1 as a substitutable
-dependency.
+dependency. The deployment CLI has one narrow provisioning exception: before
+the first Administrator exists, it may write the singleton `initial_setup`
+handoff record; for Operator Recovery, it may write the singleton
+`operator_recovery` handoff. It never writes User, credential, Session, or
+audit records.
 
 Hono and React are adapters:
 
@@ -209,7 +213,7 @@ belong in the Drizzle schema, not this document.
 | Group | Records | Important invariants |
 | --- | --- | --- |
 | Instance | instance metadata and deployed version | exactly one row per Cloudflare account |
-| Identity | users, credentials, invitations, reset tokens, sessions | normalized email is unique; at least one active Administrator remains |
+| Identity | initial setup and operator recovery handoffs, users, credentials, invitations, reset tokens, sessions | normalized email is unique; after setup, at least one active Administrator remains |
 | Links | links, destination versions, reserved aliases, tags | Alias is case-sensitive and unique; destination history is append-only |
 | Analytics | raw click events, deduplication keys, hourly/daily rollups, consumer checkpoints | event ID is idempotent; raw retention is 90 days |
 | Audit | administrative mutation events | actor, action, subject ID, time, and non-sensitive metadata are retained |
@@ -229,15 +233,98 @@ Administrator-only action with reauthentication and a strong warning.
 
 - There is no public registration. Administrators create one-time invitation
   links and deliver them manually in the MVP.
-- Email and password are the MVP credential. Passwords require at least eight
-  characters and no composition rules.
-- Invitation tokens live for 24 hours; reset tokens live for 30 minutes. Only
-  token hashes are stored and every token is single-use.
-- Sessions have a seven-day idle timeout and a 30-day absolute timeout.
-- Password, suspension, and role changes revoke existing sessions.
-- The last active Administrator cannot be suspended, deleted, or demoted.
-- Secure, HTTP-only, same-site cookies and CSRF protection guard management
-  endpoints.
+- Email and password are the MVP credential. Passwords are normalized to NFC
+  and must contain 15 to 128 Unicode code points. Spaces and all other Unicode
+  characters are allowed, with no composition rules; leading and trailing
+  spaces remain part of the password.
+- A bundled offline blocklist rejects exact matches against common or
+  compromised passwords after NFC normalization. Authentication does not send
+  password-derived data to an external breach-checking service.
+- Setup, Invitation, Password Reset, and Operator Recovery tokens are 32 random
+  bytes encoded as unpadded base64url. D1 stores only their SHA-256 hashes with
+  purpose, subject, issue time, and expiry; Invitation tokens live for 24 hours
+  and the other tokens for 30 minutes.
+- Reissuing a token invalidates its predecessors for the same purpose and
+  subject. Validation, subject state change, credential write, token
+  invalidation, and Audit Event persistence are atomic, so concurrent
+  submissions yield at most one success. Every invalid, expired, revoked, used,
+  or state-mismatched token returns the same `400 invalid-or-expired-token`.
+- Administrators create Password Reset links for Active Users and deliver them
+  manually in the MVP. Issuing one revokes prior reset tokens; successful use
+  changes the password and revokes every Session. Suspended Users are
+  ineligible, and there is no public forgot-password endpoint.
+- Invitation and Password Reset responses reveal the secret link only when it
+  is issued or reissued and use `Cache-Control: no-store`. The client keeps it
+  out of history and persistent storage; a lost link is rotated rather than
+  retrieved.
+- Setup, Invitation, Password Reset, and Operator Recovery links carry their
+  secret in the URL fragment. The SPA moves it to memory, clears the fragment
+  with `history.replaceState`, and submits it only in an HTTPS `POST` body;
+  token values are never accepted from a request URL or written to logs or
+  Audit Events. Management responses use `Referrer-Policy: no-referrer`.
+- A logged-in password change requires the current password. If every
+  Administrator loses access, Operator Recovery uses a separate interactive
+  command that proves control of the Cloudflare account rather than reopening
+  initial setup. It writes a 30-minute singleton `operator_recovery` handoff
+  for one existing Active Administrator; Management consumes it to replace
+  only that password, revoke all Sessions, and record a System Actor Audit
+  Event. It cannot create, reactivate, or change the role of a User and has no
+  non-interactive mode.
+- Each login creates a separate server-side Session for that browser or device,
+  identified by a 256-bit random opaque token whose hash is stored in D1.
+  Sessions have a seven-day idle timeout and a 30-day absolute timeout; activity
+  extends the idle deadline with at most one persistence write per hour.
+- Logout revokes the current Session. Password changes and resets, suspension,
+  and role changes revoke all Sessions for the affected User.
+- Cancelling an Invitation removes its never-activated Invited User. Once a
+  User has activated, the identity is retained: access is removed through
+  suspension and restored through reactivation with the same role.
+- User Emails cannot change in the MVP. An Invited User with an incorrect email
+  is cancelled and invited again; an activated User whose email changes is
+  suspended and replaced by a newly invited User.
+- Any transition that would leave no Active Administrator, including
+  suspension or demotion, is rejected atomically. Self-suspension and
+  self-demotion are allowed only while another Active Administrator remains.
+- The Session cookie is named `__Host-shortflare_session` and uses `Secure`,
+  `HttpOnly`, `SameSite=Lax`, and `Path=/` without a `Domain` attribute. Its
+  expiry never exceeds the Session's absolute deadline.
+- Safe HTTP methods have no side effects. Other management requests require a
+  random Session-bound CSRF token in `X-CSRF-Token` and an exact Management
+  Origin match; the SPA obtains the token from an authenticated safe request
+  and retains it only in memory.
+- The Management API is same-origin only and emits no CORS allow headers.
+  State-changing requests, including unauthenticated token and login exchanges,
+  require the exact Management Origin and `application/json`; HTML form bodies
+  and requests from the Redirect origin are rejected. A future `/api/v1/*`
+  public API defines its own authentication and CORS boundary.
+- Each authenticated request resolves the current Session, User state, and role
+  from D1. A centralized role-to-capability mapping runs in the Hono adapter
+  before any module call; authenticated but unauthorized requests return `403`,
+  while an invalid Session or non-Active User returns `401`. Modules receive
+  the validated User as their Actor.
+- Unauthenticated access is limited to the data-free SPA shell and static
+  assets, a health response containing only `{"status":"ok"}`, login, initial
+  Setup Token use, Invitation acceptance, Password Reset use, and Operator
+  Recovery use. Every other `/api/internal/*` endpoint requires an Active User
+  Session, and no User, Instance, or Link data is embedded in the public shell.
+- Login returns the same `401 invalid-credentials` result for an unknown User
+  Email, an Invited or Suspended User, and a wrong password. Missing
+  credentials run against a fixed dummy verifier to preserve the expensive
+  verification path. Failed attempts do not lock the User or create Audit
+  Events; rate limits provide online-guessing protection.
+- A Session must have verified its User's password within the previous ten
+  minutes before granting Administrator, suspending or demoting an
+  Administrator, generating a Password Reset, permanently deleting a Link, or
+  releasing a Reserved Alias. Successful reauthentication rotates the Session
+  token. A stale Session receives `403 reauthentication-required` without
+  performing the command; changing one's own password always verifies the
+  current password regardless of this window.
+- Audit Events record successful initial Administrator activation, Invitation
+  issue, reissue, cancellation and acceptance, Password Reset issue and use,
+  password change, role change, suspension, and reactivation. Login, logout,
+  reauthentication, failures, and no-ops are excluded. Metadata may identify
+  prior and new roles or states but never a User Email, password, token, or
+  Session identifier.
 - Authentication, invitation, reset, and management endpoints are rate-limited.
 
 The password hashing implementation must store an algorithm and parameters with
@@ -254,6 +341,13 @@ module's interface.
 | Permanently delete Links or release Aliases | yes | no | no |
 | Manage Users, roles, and Instance settings | yes | no | no |
 | View audit records | yes | no | no |
+
+The authentication slice promotes the development-only
+`POST /api/internal/links` route into the first production management
+operation. Administrator and Member Sessions may call it, Viewer Sessions
+receive `403`, and the validated User becomes the Links Actor. Its integration
+test performs initial setup and login before exercising the existing
+Management-to-D1-to-Redirect path.
 
 ## Monorepo layout
 
@@ -366,13 +460,22 @@ Instance in the same account.
 4. shows the current and target versions and pending migrations;
 5. creates or reconciles D1, Queue, dead-letter queue, bindings, and routes;
 6. applies backward-compatible migrations;
-7. deploys Management, then Redirect;
-8. records the coherent Instance version; and
-9. prints the Management address and a one-time initial setup token.
+7. on first install, writes or replaces the singleton `initial_setup` record
+   only while no Active Administrator exists and the Instance has never
+   completed setup;
+8. deploys Management, then Redirect;
+9. records the coherent Instance version; and
+10. prints the Management address and a one-time initial setup token.
 
-The setup token is shown only in an interactive terminal, expires quickly, is
-stored only as a hash, and is invalidated after use. Non-interactive deployment
-requires an explicitly supplied secret and suppresses token output.
+The setup token is shown only when first created in an interactive terminal,
+expires after 30 minutes, is stored only as a hash in the `initial_setup`
+record, and is invalidated after use. An idempotent rerun preserves a valid
+pending token; expiry or explicit rotation replaces it and invalidates the
+prior token. Management atomically consumes the record to create the initial
+User, credential, and Audit Event and permanently sets the Instance's
+`setup_completed_at`; that marker is never cleared, even if data is later
+damaged or restored. Non-interactive deployment requires an explicitly supplied
+secret and suppresses token output.
 
 The command is idempotent and resumable. A failure leaves the existing Redirect
 deployment in place, and rerunning continues reconciliation. Destructive schema

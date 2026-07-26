@@ -1,7 +1,12 @@
 {
   "extends": "../../packages/tooling/typescript/browser.json",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "vite/client"]
+    "types": [
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-pool-workers/types",
+      "node",
+      "vite/client"
+    ]
   },
   "include": ["src", "test"]
 }

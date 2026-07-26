@@ -1,7 +1,11 @@
 import { createD1LinksPersistence } from "@shortflare/database";
 import { createLinks } from "@shortflare/links";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
+
+import { type Capability, hasCapability } from "./authorization";
+import { createIdentity, type User } from "./identity";
 
 const healthResponse = z.object({ status: z.literal("ok") });
 const createLinkRequest = z.strictObject({
@@ -9,44 +13,490 @@ const createLinkRequest = z.strictObject({
   title: z.string(),
   destination: z.string(),
 });
+const setupRequest = z.strictObject({
+  token: z.string(),
+  password: z.string(),
+});
+const loginRequest = z.strictObject({
+  email: z.string(),
+  password: z.string(),
+});
+const invitationRequest = z.strictObject({
+  email: z.string(),
+  role: z.enum(["administrator", "member", "viewer"]),
+});
+const tokenPasswordRequest = z.strictObject({
+  token: z.string(),
+  password: z.string(),
+});
+const passwordRequest = z.strictObject({
+  password: z.string(),
+});
+const passwordChangeRequest = z.strictObject({
+  currentPassword: z.string(),
+  password: z.string(),
+});
+const roleRequest = z.strictObject({
+  role: z.enum(["administrator", "member", "viewer"]),
+});
+const emptyRequest = z.strictObject({});
 
 type Bindings = {
   DB: D1Database;
   REDIRECT_DOMAIN: string;
 };
+type AppEnvironment = { Bindings: Bindings };
 
-export const app = new Hono<{ Bindings: Bindings }>();
+export const app = new Hono<AppEnvironment>();
+
+app.use("*", async (context, next) => {
+  await next();
+  context.header("Referrer-Policy", "no-referrer");
+  if (context.req.path.startsWith("/api/")) {
+    context.header("Cache-Control", "no-store");
+  }
+});
 
 app.get("/api/internal/health", (context) => context.json(healthResponse.parse({ status: "ok" })));
 
-if (import.meta.env.DEV) {
-  app.post("/api/internal/links", async (context) => {
-    let body: unknown;
-    try {
-      body = await context.req.json();
-    } catch {
-      return context.json({ ok: false, kind: "invalid-request" } as const, 400);
-    }
+app.post("/api/internal/auth/setup", async (context) => {
+  if (!isSameOriginJsonRequest(context.req.raw)) {
+    return context.json({ ok: false, kind: "forbidden" } as const, 403);
+  }
+  const request = await parseJson(context.req.raw, setupRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
 
-    const request = createLinkRequest.safeParse(body);
-    if (!request.success) {
-      return context.json({ ok: false, kind: "invalid-request" } as const, 400);
-    }
+  const result = await createIdentity({ db: context.env.DB }).completeInitialSetup(request);
+  return context.json(result, result.ok ? 201 : 400);
+});
 
-    const links = createLinks({
-      persistence: createD1LinksPersistence(context.env.DB),
-      redirectDomain: context.env.REDIRECT_DOMAIN,
-    });
-    const result = await links.execute(
-      { kind: "create", ...request.data },
-      { id: "system:development" },
-    );
-    if (result.ok) {
-      return context.json(result, 201);
-    }
-    const status = result.kind === "alias-in-use" || result.kind === "alias-reserved" ? 409 : 400;
-    return context.json(result, status);
+app.post("/api/internal/auth/login", async (context) => {
+  if (!isSameOriginJsonRequest(context.req.raw)) {
+    return context.json({ ok: false, kind: "forbidden" } as const, 403);
+  }
+  const request = await parseJson(context.req.raw, loginRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+
+  const result = await createIdentity({ db: context.env.DB }).login(request);
+  if (!result.ok) {
+    return context.json(result, 401);
+  }
+  setSessionCookie(context, result.session);
+  return context.json({
+    ok: true as const,
+    user: result.session.user,
+    csrfToken: result.session.csrfToken,
   });
+});
+
+app.get("/api/internal/auth/session", async (context) => {
+  const sessionToken = getCookie(context, "__Host-shortflare_session");
+  if (!sessionToken) {
+    return context.json({ ok: false, kind: "unauthenticated" } as const, 401);
+  }
+  const result = await createIdentity({ db: context.env.DB }).openSession(sessionToken);
+  if (!result.ok) {
+    deleteSessionCookie(context);
+    return context.json({ ok: false, kind: "unauthenticated" } as const, 401);
+  }
+  return context.json({
+    ok: true as const,
+    user: result.session.user,
+    csrfToken: result.session.csrfToken,
+  });
+});
+
+app.post("/api/internal/auth/logout", async (context) => {
+  if (!isSameOriginJsonRequest(context.req.raw)) {
+    return context.json({ ok: false, kind: "forbidden" } as const, 403);
+  }
+  const sessionToken = getCookie(context, "__Host-shortflare_session");
+  if (!sessionToken) {
+    return context.json({ ok: false, kind: "unauthenticated" } as const, 401);
+  }
+  const identity = createIdentity({ db: context.env.DB });
+  const authentication = await identity.authenticateRequest(
+    sessionToken,
+    context.req.header("x-csrf-token") ?? "",
+  );
+  if (!authentication.ok) {
+    return context.json(
+      {
+        ok: false,
+        kind:
+          authentication.kind === "invalid-credentials" ? "unauthenticated" : "invalid-csrf-token",
+      } as const,
+      authentication.kind === "invalid-credentials" ? 401 : 403,
+    );
+  }
+  await identity.logout(sessionToken);
+  deleteSessionCookie(context);
+  return context.body(null, 204);
+});
+
+app.post("/api/internal/auth/invitations/accept", async (context) => {
+  if (!isSameOriginJsonRequest(context.req.raw)) {
+    return context.json({ ok: false, kind: "forbidden" } as const, 403);
+  }
+  const request = await parseJson(context.req.raw, tokenPasswordRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const result = await createIdentity({ db: context.env.DB }).acceptInvitation(request);
+  return context.json(result, result.ok ? 200 : 400);
+});
+
+app.post("/api/internal/auth/password-resets/use", async (context) => {
+  if (!isSameOriginJsonRequest(context.req.raw)) {
+    return context.json({ ok: false, kind: "forbidden" } as const, 403);
+  }
+  const request = await parseJson(context.req.raw, tokenPasswordRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const result = await createIdentity({ db: context.env.DB }).usePasswordReset(request);
+  return context.json(result, result.ok ? 200 : 400);
+});
+
+app.post("/api/internal/auth/operator-recovery", async (context) => {
+  if (!isSameOriginJsonRequest(context.req.raw)) {
+    return context.json({ ok: false, kind: "forbidden" } as const, 403);
+  }
+  const request = await parseJson(context.req.raw, tokenPasswordRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const result = await createIdentity({ db: context.env.DB }).useOperatorRecovery(request);
+  return context.json(result, result.ok ? 200 : 400);
+});
+
+app.post("/api/internal/auth/reauthenticate", async (context) => {
+  const authenticated = await authenticateMutation(context);
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+  const request = await parseJson(context.req.raw, passwordRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const result = await authenticated.identity.reauthenticate({
+    token: authenticated.sessionToken,
+    password: request.password,
+  });
+  if (!result.ok) {
+    return context.json(result, 401);
+  }
+  setSessionCookie(context, result.session);
+  return context.json({
+    ok: true as const,
+    user: result.session.user,
+    csrfToken: result.session.csrfToken,
+  });
+});
+
+app.post("/api/internal/auth/password", async (context) => {
+  const authenticated = await authenticateMutation(context);
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+  const request = await parseJson(context.req.raw, passwordChangeRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const result = await authenticated.identity.changePassword({
+    userId: authenticated.user.id,
+    ...request,
+  });
+  if (result.ok) {
+    deleteSessionCookie(context);
+  }
+  return context.json(result, result.ok ? 200 : 400);
+});
+
+app.post("/api/internal/users/invitations", async (context) => {
+  const request = await parseJson(context.req.raw, invitationRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const authenticated = await authenticateMutation(context, {
+    capability: "manage-users",
+    recent: request.role === "administrator",
+  });
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+  const result = await authenticated.identity.issueInvitation({
+    actorId: authenticated.user.id,
+    ...request,
+  });
+  const status = result.ok ? 201 : result.kind === "invalid-email" ? 400 : 409;
+  return context.json(result, status);
+});
+
+app.get("/api/internal/users", async (context) => {
+  const authenticated = await authenticateSafe(context, "view-users");
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+  return context.json({ ok: true as const, users: await authenticated.identity.listUsers() });
+});
+
+app.post("/api/internal/users/:userId/cancel-invitation", async (context) => {
+  const authenticated = await authenticateMutation(context, { capability: "manage-users" });
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+  const request = await parseJson(context.req.raw, emptyRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const result = await authenticated.identity.cancelInvitation({
+    actorId: authenticated.user.id,
+    userId: context.req.param("userId"),
+  });
+  return context.json(result, result.ok ? 200 : 404);
+});
+
+app.post("/api/internal/users/:userId/password-resets", async (context) => {
+  const authenticated = await authenticateMutation(context, {
+    capability: "manage-users",
+    recent: true,
+  });
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+  const request = await parseJson(context.req.raw, emptyRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const result = await authenticated.identity.issuePasswordReset({
+    actorId: authenticated.user.id,
+    userId: context.req.param("userId"),
+  });
+  return context.json(result, result.ok ? 201 : result.kind === "user-suspended" ? 409 : 404);
+});
+
+app.post("/api/internal/users/:userId/role", async (context) => {
+  const request = await parseJson(context.req.raw, roleRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const authenticated = await authenticateMutation(context, {
+    capability: "manage-users",
+  });
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+  const result = await authenticated.identity.changeRole({
+    actorId: authenticated.user.id,
+    userId: context.req.param("userId"),
+    role: request.role,
+    recentlyAuthenticated: authenticated.recentlyAuthenticated,
+  });
+  return context.json(
+    result,
+    result.ok
+      ? 200
+      : result.kind === "user-not-found"
+        ? 404
+        : result.kind === "reauthentication-required"
+          ? 403
+          : 409,
+  );
+});
+
+app.post("/api/internal/users/:userId/suspend", async (context) => {
+  const authenticated = await authenticateMutation(context, {
+    capability: "manage-users",
+  });
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+  const request = await parseJson(context.req.raw, emptyRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const result = await authenticated.identity.suspendUser({
+    actorId: authenticated.user.id,
+    userId: context.req.param("userId"),
+    recentlyAuthenticated: authenticated.recentlyAuthenticated,
+  });
+  return context.json(
+    result,
+    result.ok
+      ? 200
+      : result.kind === "user-not-found"
+        ? 404
+        : result.kind === "reauthentication-required"
+          ? 403
+          : 409,
+  );
+});
+
+app.post("/api/internal/users/:userId/reactivate", async (context) => {
+  const authenticated = await authenticateMutation(context, { capability: "manage-users" });
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+  const request = await parseJson(context.req.raw, emptyRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+  const result = await authenticated.identity.reactivateUser({
+    actorId: authenticated.user.id,
+    userId: context.req.param("userId"),
+  });
+  return context.json(result, result.ok ? 200 : 404);
+});
+
+app.post("/api/internal/links", async (context) => {
+  const authenticated = await authenticateMutation(context, { capability: "create-link" });
+  if ("response" in authenticated) {
+    return authenticated.response;
+  }
+
+  const request = await parseJson(context.req.raw, createLinkRequest);
+  if (!request) {
+    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+  }
+
+  const links = createLinks({
+    persistence: createD1LinksPersistence(context.env.DB),
+    redirectDomain: context.env.REDIRECT_DOMAIN,
+  });
+  const result = await links.execute({ kind: "create", ...request }, { id: authenticated.user.id });
+  if (result.ok) {
+    return context.json(result, 201);
+  }
+  const status = result.kind === "alias-in-use" || result.kind === "alias-reserved" ? 409 : 400;
+  return context.json(result, status);
+});
+
+function isSameOriginJsonRequest(request: Request) {
+  return (
+    request.headers.get("origin") === new URL(request.url).origin &&
+    request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ===
+      "application/json"
+  );
+}
+
+async function parseJson<Schema extends z.ZodType>(
+  request: Request,
+  schema: Schema,
+): Promise<z.output<Schema> | undefined> {
+  try {
+    const result = schema.safeParse(await request.json());
+    return result.success ? result.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function deleteSessionCookie(context: Parameters<typeof deleteCookie>[0]) {
+  deleteCookie(context, "__Host-shortflare_session", {
+    path: "/",
+    secure: true,
+  });
+}
+
+function setSessionCookie(
+  context: Context<AppEnvironment>,
+  session: Readonly<{ token: string; expiresAt: Date }>,
+) {
+  const maxAge = Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1_000));
+  setCookie(context, "__Host-shortflare_session", session.token, {
+    httpOnly: true,
+    maxAge,
+    path: "/",
+    sameSite: "Lax",
+    secure: true,
+  });
+}
+
+async function authenticateMutation(
+  context: Context<AppEnvironment>,
+  requirements: Readonly<{ capability?: Capability; recent?: boolean }> = {},
+): Promise<
+  | Readonly<{
+      identity: ReturnType<typeof createIdentity>;
+      user: User;
+      sessionToken: string;
+      recentlyAuthenticated: boolean;
+    }>
+  | Readonly<{ response: Response }>
+> {
+  if (!isSameOriginJsonRequest(context.req.raw)) {
+    return {
+      response: context.json({ ok: false, kind: "forbidden" } as const, 403),
+    };
+  }
+  const sessionToken = getCookie(context, "__Host-shortflare_session");
+  if (!sessionToken) {
+    return {
+      response: context.json({ ok: false, kind: "unauthenticated" } as const, 401),
+    };
+  }
+  const identity = createIdentity({ db: context.env.DB });
+  const authentication = await identity.authenticateRequest(
+    sessionToken,
+    context.req.header("x-csrf-token") ?? "",
+    requirements.recent,
+  );
+  if (!authentication.ok) {
+    const unauthenticated = authentication.kind === "invalid-credentials";
+    return {
+      response: context.json(
+        {
+          ok: false,
+          kind: unauthenticated ? "unauthenticated" : authentication.kind,
+        },
+        unauthenticated ? 401 : 403,
+      ),
+    };
+  }
+  if (requirements.capability && !hasCapability(authentication.user, requirements.capability)) {
+    return {
+      response: context.json({ ok: false, kind: "forbidden" } as const, 403),
+    };
+  }
+  return {
+    identity,
+    user: authentication.user,
+    sessionToken,
+    recentlyAuthenticated: authentication.recentlyAuthenticated,
+  };
+}
+
+async function authenticateSafe(
+  context: Context<AppEnvironment>,
+  capability?: Capability,
+): Promise<
+  | Readonly<{ identity: ReturnType<typeof createIdentity>; user: User }>
+  | Readonly<{ response: Response }>
+> {
+  const sessionToken = getCookie(context, "__Host-shortflare_session");
+  if (!sessionToken) {
+    return {
+      response: context.json({ ok: false, kind: "unauthenticated" } as const, 401),
+    };
+  }
+  const identity = createIdentity({ db: context.env.DB });
+  const authentication = await identity.authenticate(sessionToken);
+  if (!authentication.ok) {
+    return {
+      response: context.json({ ok: false, kind: "unauthenticated" } as const, 401),
+    };
+  }
+  if (capability && !hasCapability(authentication.user, capability)) {
+    return {
+      response: context.json({ ok: false, kind: "forbidden" } as const, 403),
+    };
+  }
+  return { identity, user: authentication.user };
 }
 
 export default app;
