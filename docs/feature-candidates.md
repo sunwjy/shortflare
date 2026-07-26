@@ -54,6 +54,16 @@ shortener that can be deployed through a simple Cloudflare-oriented workflow.
 
 ## Next
 
+### Transactional email delivery — high priority
+
+- Deliver Invitation and Password Reset links without requiring an
+  Administrator to copy them manually.
+- Add verified User Email changes after the delivery channel can confirm
+  ownership of the new address.
+- Keep token contents out of logs and expose delivery failures without
+  invalidating an otherwise valid token.
+- Select the provider and retry model through a separate design decision.
+
 ### REST API
 
 - Link creation, retrieval, update, disable, archive, and deletion endpoints.

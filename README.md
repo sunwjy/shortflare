@@ -79,8 +79,8 @@ curl --request POST "$MANAGEMENT_URL/api/internal/links" \
 ```
 
 The endpoint is included only in Vite development mode. Production builds
-return `404`, and the endpoint will be removed when authenticated management
-operations replace it.
+return `404`. The authentication slice will promote this route into the first
+real Administrator/Member management operation rather than replacing it.
 
 The Redirect integration suite verifies the local Management HTTP → shared D1
 → Redirect HTTP flow:

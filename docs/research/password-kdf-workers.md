@@ -206,8 +206,9 @@ the equivalent native API). After a successful login, hash again when the
 stored scheme or parameters differ from the current policy.
 
 Generate a fresh 16-byte salt with `crypto.getRandomValues` for every password.
-Treat passwords as UTF-8 bytes with one documented normalization policy; do not
-let individual KDF libraries apply different string conversions.
+Normalize passwords to NFC, validate the 15-to-128 Unicode code-point policy,
+then encode them as UTF-8 bytes; do not let individual KDF libraries apply
+different string conversions.
 
 ## Benchmark protocol
 
