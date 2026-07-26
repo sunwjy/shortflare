@@ -20,4 +20,9 @@ export type {
   RedirectDecision,
   ReservedAlias,
 } from "./types";
-export { encodeListCursor, foldCase, parseAlias } from "./values";
+export {
+  encodeListCursor,
+  foldCase,
+  mergeQuery as mergeDestinationQuery,
+  parseAlias,
+} from "./values";

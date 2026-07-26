@@ -98,6 +98,12 @@ importers:
 
   apps/management:
     dependencies:
+      '@shortflare/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@shortflare/links':
+        specifier: workspace:*
+        version: link:../../packages/links
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.101.2(react@19.2.7)
@@ -147,6 +153,12 @@ importers:
 
   apps/redirect-worker:
     dependencies:
+      '@shortflare/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@shortflare/links':
+        specifier: workspace:*
+        version: link:../../packages/links
       hono:
         specifier: 'catalog:'
         version: 4.12.31
