@@ -1,5 +1,5 @@
 import type { Link, LinksPersistence, ReservedAlias } from "./types";
-import { foldCase } from "./values";
+import { encodeListCursor, foldCase } from "./values";
 
 export function createInMemoryLinksPersistence(): LinksPersistence {
   const linksByAlias = new Map<string, Link>();
@@ -113,7 +113,7 @@ export function createInMemoryLinksPersistence(): LinksPersistence {
       return reservedAliases.delete(alias) ? "released" : "not-found";
     },
     async list(query) {
-      const normalizedSearch = foldCase(query.search);
+      const normalizedSearch = query.search;
       const matching = Array.from(linksById.values())
         .filter(
           (link) =>
@@ -126,16 +126,43 @@ export function createInMemoryLinksPersistence(): LinksPersistence {
           (left, right) =>
             right.updatedAt.getTime() - left.updatedAt.getTime() || left.id.localeCompare(right.id),
         );
-      const cursorIndex =
+      const afterCursor =
         query.cursor === undefined
-          ? 0
-          : Math.max(0, matching.findIndex((link) => link.id === query.cursor) + 1);
-      const items = matching.slice(cursorIndex, cursorIndex + query.limit);
-      const hasMore = cursorIndex + items.length < matching.length;
+          ? matching
+          : matching.filter(
+              (link) =>
+                link.updatedAt < query.cursor!.updatedAt ||
+                (link.updatedAt.getTime() === query.cursor!.updatedAt.getTime() &&
+                  link.id.localeCompare(query.cursor!.id) > 0),
+            );
+      const pageLinks = afterCursor.slice(0, query.limit);
+      const items = pageLinks.map((link) => {
+        const currentDestinationVersion = link.destinationVersions.at(-1);
+        if (currentDestinationVersion === undefined) {
+          throw new Error(`Link ${link.id} has no Destination Version`);
+        }
+        return {
+          id: link.id,
+          alias: link.alias,
+          title: link.title,
+          state: link.state,
+          currentDestinationVersion,
+          createdAt: link.createdAt,
+          updatedAt: link.updatedAt,
+        };
+      });
+      const hasMore = pageLinks.length < afterCursor.length;
+      const lastItem = items.at(-1);
 
       return {
         items: structuredClone(items),
-        nextCursor: hasMore ? (items.at(-1)?.id ?? null) : null,
+        nextCursor:
+          hasMore && lastItem !== undefined
+            ? encodeListCursor({
+                updatedAt: lastItem.updatedAt,
+                id: lastItem.id,
+              })
+            : null,
       };
     },
   };

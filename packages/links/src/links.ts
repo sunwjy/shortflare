@@ -12,6 +12,8 @@ import type {
 } from "./types";
 import {
   generateRandomAlias,
+  decodeListCursor,
+  foldCase,
   mergeQuery,
   normalizeTitle,
   parseAlias,
@@ -197,11 +199,16 @@ export function createLinks(options: CreateLinksOptions): Links {
           : { ok: true, kind: "detail", link };
       }
 
+      const cursor = query.cursor === undefined ? undefined : decodeListCursor(query.cursor);
+      if (cursor === null) {
+        return { ok: false, kind: "invalid-cursor" };
+      }
+
       const listQuery: PersistenceListQuery = {
-        search: query.search ?? "",
+        search: foldCase(query.search ?? ""),
         states: query.states ?? ["active", "disabled"],
         limit: Math.max(1, Math.min(100, query.limit ?? 50)),
-        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+        ...(cursor === undefined ? {} : { cursor }),
       };
       return {
         ok: true,

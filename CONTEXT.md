@@ -75,3 +75,7 @@ _Avoid_: Deleted link, disabled link
 **Reserved Alias**:
 A formerly public Alias retained after its Link is permanently deleted so that the old URL cannot silently point to an unrelated destination. Releasing it is a separate administrative act.
 _Avoid_: Tombstone, deleted alias
+
+**Audit Event**:
+A retained record of a successful administrative command that changed an Instance, containing identifiers and non-sensitive metadata but not Link titles or Destinations. No-op commands and failed attempts do not produce Audit Events.
+_Avoid_: Audit log entry, request log
