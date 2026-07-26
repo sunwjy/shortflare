@@ -64,23 +64,10 @@ Apply the versioned migrations to the local D1 database with:
 pnpm --filter @shortflare/management db:migrate:local
 ```
 
-During local development, Management exposes a temporary Link creation endpoint
-for the first end-to-end vertical slice. Use the Management URL printed by
-Vite:
-
-```sh
-curl --request POST "$MANAGEMENT_URL/api/internal/links" \
-  --header "content-type: application/json" \
-  --data '{
-    "alias": "Docs",
-    "title": "Documentation",
-    "destination": "https://example.com/guide"
-  }'
-```
-
-The endpoint is included only in Vite development mode. Production builds
-return `404`. The authentication slice will promote this route into the first
-real Administrator/Member management operation rather than replacing it.
+Management exposes `POST /api/internal/links` as an authenticated
+Administrator/Member operation. It requires the host-only Session cookie, the
+exact Management origin, and the Session's CSRF token. The local integration
+suite performs initial Administrator setup and login before creating a Link.
 
 The Redirect integration suite verifies the local Management HTTP → shared D1
 → Redirect HTTP flow:

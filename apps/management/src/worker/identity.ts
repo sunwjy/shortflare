@@ -1,0 +1,1217 @@
+import { Buffer } from "node:buffer";
+import { scrypt, timingSafeEqual } from "node:crypto";
+
+export type UserRole = "administrator" | "member" | "viewer";
+export type UserState = "invited" | "active" | "suspended";
+
+export type User = Readonly<{
+  id: string;
+  email: string;
+  role: UserRole;
+  state: UserState;
+}>;
+
+type IdentityOptions = Readonly<{
+  db: D1Database;
+  now?: () => Date;
+  randomId?: () => string;
+  randomToken?: () => string;
+}>;
+
+type InitialSetupInput = Readonly<{
+  displayEmail: string;
+  token: string;
+  expiresAt: Date;
+}>;
+
+type CompleteInitialSetupInput = Readonly<{
+  token: string;
+  password: string;
+}>;
+
+type TokenFailure = Readonly<{ ok: false; kind: "invalid-or-expired-token" }>;
+type PasswordFailure = Readonly<{ ok: false; kind: "invalid-password" }>;
+type UserResult = Readonly<{ ok: true; kind: "user"; user: User }>;
+type LoginFailure = Readonly<{ ok: false; kind: "invalid-credentials" }>;
+type CsrfFailure = Readonly<{ ok: false; kind: "invalid-csrf-token" }>;
+type ReauthenticationFailure = Readonly<{
+  ok: false;
+  kind: "reauthentication-required";
+}>;
+type SessionResult = Readonly<{
+  ok: true;
+  kind: "session";
+  session: Readonly<{
+    token: string;
+    csrfToken: string;
+    expiresAt: Date;
+    user: User;
+  }>;
+}>;
+type InvitationResult = Readonly<{
+  ok: true;
+  kind: "invitation";
+  invitation: Readonly<{
+    user: User;
+    token: string;
+    expiresAt: Date;
+  }>;
+}>;
+type UserConflict = Readonly<{
+  ok: false;
+  kind: "invalid-email" | "user-active" | "user-suspended";
+}>;
+type PasswordResetResult = Readonly<{
+  ok: true;
+  kind: "password-reset";
+  passwordReset: Readonly<{
+    user: User;
+    token: string;
+    expiresAt: Date;
+  }>;
+}>;
+
+const scryptPolicy = {
+  N: 32_768,
+  r: 8,
+  p: 1,
+  outputLength: 32,
+  maxmem: 48 * 1_024 * 1_024,
+} as const;
+
+const blockedPasswords = new Set([
+  "123456789012345",
+  "correct horse battery staple",
+  "letmeinletmeinletmein",
+  "passwordpassword",
+  "qwertyuiopasdfgh",
+]);
+const dummyVerifier =
+  "scrypt$v=1$N=32768,r=8,p=1,l=32$BwcHBwcHBwcHBwcHBwcHBw$5ZN-eW8mCOZ-tc6XvKT-cn5aLMwFQ-hPtgjaL-IM0-0";
+
+const idleSessionDuration = 7 * 24 * 60 * 60 * 1_000;
+const absoluteSessionDuration = 30 * 24 * 60 * 60 * 1_000;
+const invitationDuration = 24 * 60 * 60 * 1_000;
+const passwordResetDuration = 30 * 60 * 1_000;
+const recentAuthenticationDuration = 10 * 60 * 1_000;
+
+export function createIdentity(options: IdentityOptions) {
+  const now = options.now ?? (() => new Date());
+  const randomId = options.randomId ?? (() => crypto.randomUUID());
+  const randomToken = options.randomToken ?? createRandomToken;
+
+  return {
+    async writeInitialSetup(input: InitialSetupInput): Promise<void> {
+      const email = parseUserEmail(input.displayEmail);
+      if (!email) {
+        throw new Error("Invalid initial Administrator email");
+      }
+      const setupAvailability = await options.db
+        .prepare(
+          `SELECT
+             instances.setup_completed_at AS setupCompletedAt,
+             EXISTS (
+               SELECT 1 FROM users
+               WHERE state = 'active' AND role = 'administrator'
+             ) AS hasActiveAdministrator
+           FROM instances WHERE singleton_key = 1`,
+        )
+        .first<{ setupCompletedAt: number | null; hasActiveAdministrator: number }>();
+      if (
+        !setupAvailability ||
+        setupAvailability.setupCompletedAt !== null ||
+        setupAvailability.hasActiveAdministrator === 1
+      ) {
+        throw new Error("Initial setup is permanently closed");
+      }
+      const occurredAt = now().getTime();
+      const tokenHash = await hashToken(input.token);
+
+      await options.db.batch([
+        options.db.prepare(
+          `DELETE FROM initial_setup
+             WHERE singleton_key = 1
+               AND EXISTS (
+                 SELECT 1 FROM instances
+                 WHERE singleton_key = 1 AND setup_completed_at IS NULL
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM users
+                 WHERE state = 'active' AND role = 'administrator'
+               )`,
+        ),
+        options.db
+          .prepare(
+            `INSERT INTO initial_setup
+               (singleton_key, display_email, normalized_email, token_hash, created_at, expires_at)
+             SELECT 1, ?, ?, ?, ?, ?
+             WHERE EXISTS (
+               SELECT 1 FROM instances
+               WHERE singleton_key = 1 AND setup_completed_at IS NULL
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM users
+               WHERE state = 'active' AND role = 'administrator'
+             )`,
+          )
+          .bind(email.display, email.normalized, tokenHash, occurredAt, input.expiresAt.getTime()),
+      ]);
+    },
+
+    async completeInitialSetup(
+      input: CompleteInitialSetupInput,
+    ): Promise<TokenFailure | PasswordFailure | UserResult> {
+      const occurredAt = now().getTime();
+      const tokenHash = await hashToken(input.token);
+      const setup = await options.db
+        .prepare(
+          `SELECT display_email AS displayEmail, normalized_email AS normalizedEmail
+           FROM initial_setup
+           WHERE singleton_key = 1 AND token_hash = ? AND expires_at > ?`,
+        )
+        .bind(tokenHash, occurredAt)
+        .first<{ displayEmail: string; normalizedEmail: string }>();
+      if (!setup) {
+        return { ok: false, kind: "invalid-or-expired-token" };
+      }
+
+      const verifier = await createPasswordVerifier(input.password);
+      if (!verifier) {
+        return { ok: false, kind: "invalid-password" };
+      }
+
+      const userId = randomId();
+      const auditId = randomId();
+      try {
+        await options.db.batch([
+          options.db
+            .prepare(
+              `DELETE FROM initial_setup
+               WHERE singleton_key = 1 AND token_hash = ? AND expires_at > ?`,
+            )
+            .bind(tokenHash, occurredAt),
+          options.db
+            .prepare(
+              `INSERT INTO users
+                 (id, display_email, normalized_email, state, role, activated_at, created_at, updated_at)
+               VALUES (?, ?, ?, 'active', 'administrator', ?, ?, ?)`,
+            )
+            .bind(
+              userId,
+              setup.displayEmail,
+              setup.normalizedEmail,
+              occurredAt,
+              occurredAt,
+              occurredAt,
+            ),
+          options.db
+            .prepare(
+              `INSERT INTO credentials (user_id, verifier, updated_at)
+               VALUES (?, ?, ?)`,
+            )
+            .bind(userId, verifier, occurredAt),
+          options.db
+            .prepare(
+              `UPDATE instances SET setup_completed_at = ?
+               WHERE singleton_key = 1 AND setup_completed_at IS NULL`,
+            )
+            .bind(occurredAt),
+          options.db
+            .prepare(
+              `INSERT INTO audit_events
+                 (id, actor_id, action, subject_id, occurred_at, metadata)
+               VALUES (?, 'system', 'initial-administrator-activate', ?, ?, ?)`,
+            )
+            .bind(
+              auditId,
+              userId,
+              occurredAt,
+              JSON.stringify({ toRole: "administrator", toUserState: "active" }),
+            ),
+        ]);
+      } catch {
+        return { ok: false, kind: "invalid-or-expired-token" };
+      }
+
+      return {
+        ok: true,
+        kind: "user",
+        user: {
+          id: userId,
+          email: setup.displayEmail,
+          role: "administrator",
+          state: "active",
+        },
+      };
+    },
+
+    async login(
+      input: Readonly<{ email: string; password: string }>,
+    ): Promise<LoginFailure | SessionResult> {
+      const email = parseUserEmail(input.email);
+      const record = email
+        ? await options.db
+            .prepare(
+              `SELECT
+                 users.id,
+                 users.display_email AS email,
+                 users.role,
+                 users.state,
+                 credentials.verifier
+               FROM users
+               LEFT JOIN credentials ON credentials.user_id = users.id
+               WHERE users.normalized_email = ?`,
+            )
+            .bind(email.normalized)
+            .first<User & { verifier: string | null }>()
+        : null;
+      const verified = await verifyPassword(input.password, record?.verifier ?? dummyVerifier);
+      if (!record || record.state !== "active" || !record.verifier || !verified) {
+        return { ok: false, kind: "invalid-credentials" };
+      }
+
+      const occurredAt = now().getTime();
+      const sessionId = randomId();
+      const token = randomToken();
+      const csrfToken = randomToken();
+      const expiresAt = new Date(occurredAt + absoluteSessionDuration);
+      await options.db
+        .prepare(
+          `INSERT INTO sessions
+             (id, user_id, token_hash, csrf_token_hash, created_at, last_seen_at,
+              idle_expires_at, absolute_expires_at, recent_authentication_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          sessionId,
+          record.id,
+          await hashToken(token),
+          await hashToken(csrfToken),
+          occurredAt,
+          occurredAt,
+          occurredAt + idleSessionDuration,
+          expiresAt.getTime(),
+          occurredAt,
+        )
+        .run();
+
+      return {
+        ok: true,
+        kind: "session",
+        session: {
+          token,
+          csrfToken,
+          expiresAt,
+          user: toUser(record),
+        },
+      };
+    },
+
+    async authenticate(token: string): Promise<LoginFailure | UserResult> {
+      const occurredAt = now().getTime();
+      const record = await options.db
+        .prepare(
+          `SELECT users.id, users.display_email AS email, users.role, users.state
+           FROM sessions
+           INNER JOIN users ON users.id = sessions.user_id
+           WHERE sessions.token_hash = ?
+             AND sessions.idle_expires_at > ?
+             AND sessions.absolute_expires_at > ?
+             AND users.state = 'active'`,
+        )
+        .bind(await hashToken(token), occurredAt, occurredAt)
+        .first<User>();
+      if (!record) {
+        return { ok: false, kind: "invalid-credentials" };
+      }
+      return { ok: true, kind: "user", user: toUser(record) };
+    },
+
+    async authenticateRequest(
+      token: string,
+      csrfToken: string,
+      requireRecentAuthentication = false,
+    ): Promise<LoginFailure | CsrfFailure | ReauthenticationFailure | UserResult> {
+      const occurredAt = now().getTime();
+      const record = await options.db
+        .prepare(
+          `SELECT
+             users.id,
+             users.display_email AS email,
+             users.role,
+             users.state,
+             sessions.csrf_token_hash AS csrfTokenHash,
+             sessions.recent_authentication_at AS recentAuthenticationAt
+           FROM sessions
+           INNER JOIN users ON users.id = sessions.user_id
+           WHERE sessions.token_hash = ?
+             AND sessions.idle_expires_at > ?
+             AND sessions.absolute_expires_at > ?
+             AND users.state = 'active'`,
+        )
+        .bind(await hashToken(token), occurredAt, occurredAt)
+        .first<User & { csrfTokenHash: string; recentAuthenticationAt: number }>();
+      if (!record) {
+        return { ok: false, kind: "invalid-credentials" };
+      }
+      const suppliedCsrfHash = await hashToken(csrfToken);
+      if (
+        !timingSafeEqual(
+          Buffer.from(record.csrfTokenHash, "hex"),
+          Buffer.from(suppliedCsrfHash, "hex"),
+        )
+      ) {
+        return { ok: false, kind: "invalid-csrf-token" };
+      }
+      if (
+        requireRecentAuthentication &&
+        occurredAt - record.recentAuthenticationAt > recentAuthenticationDuration
+      ) {
+        return { ok: false, kind: "reauthentication-required" };
+      }
+      return { ok: true, kind: "user", user: toUser(record) };
+    },
+
+    async openSession(token: string): Promise<LoginFailure | SessionResult> {
+      const occurredAt = now().getTime();
+      const record = await options.db
+        .prepare(
+          `SELECT
+             sessions.id AS sessionId,
+             sessions.last_seen_at AS lastSeenAt,
+             sessions.absolute_expires_at AS absoluteExpiresAt,
+             users.id,
+             users.display_email AS email,
+             users.role,
+             users.state
+           FROM sessions
+           INNER JOIN users ON users.id = sessions.user_id
+           WHERE sessions.token_hash = ?
+             AND sessions.idle_expires_at > ?
+             AND sessions.absolute_expires_at > ?
+             AND users.state = 'active'`,
+        )
+        .bind(await hashToken(token), occurredAt, occurredAt)
+        .first<User & { sessionId: string; lastSeenAt: number; absoluteExpiresAt: number }>();
+      if (!record) {
+        return { ok: false, kind: "invalid-credentials" };
+      }
+      const csrfToken = randomToken();
+      const shouldRefreshIdle = occurredAt - record.lastSeenAt >= 60 * 60 * 1_000;
+      await options.db
+        .prepare(
+          `UPDATE sessions
+           SET csrf_token_hash = ?,
+               last_seen_at = ?,
+               idle_expires_at = ?
+           WHERE id = ?`,
+        )
+        .bind(
+          await hashToken(csrfToken),
+          shouldRefreshIdle ? occurredAt : record.lastSeenAt,
+          shouldRefreshIdle
+            ? Math.min(occurredAt + idleSessionDuration, record.absoluteExpiresAt)
+            : Math.min(record.lastSeenAt + idleSessionDuration, record.absoluteExpiresAt),
+          record.sessionId,
+        )
+        .run();
+      return {
+        ok: true,
+        kind: "session",
+        session: {
+          token,
+          csrfToken,
+          expiresAt: new Date(record.absoluteExpiresAt),
+          user: toUser(record),
+        },
+      };
+    },
+
+    async issueInvitation(
+      input: Readonly<{ actorId: string; email: string; role: UserRole }>,
+    ): Promise<UserConflict | InvitationResult> {
+      const email = parseUserEmail(input.email);
+      if (!email) {
+        return { ok: false, kind: "invalid-email" };
+      }
+      const existing = await options.db
+        .prepare(
+          `SELECT id, display_email AS email, role, state
+           FROM users WHERE normalized_email = ?`,
+        )
+        .bind(email.normalized)
+        .first<User>();
+      if (existing?.state === "active") {
+        return { ok: false, kind: "user-active" };
+      }
+      if (existing?.state === "suspended") {
+        return { ok: false, kind: "user-suspended" };
+      }
+
+      const occurredAt = now().getTime();
+      const expiresAt = new Date(occurredAt + invitationDuration);
+      const userId = existing?.id ?? randomId();
+      const invitationId = randomId();
+      const auditId = randomId();
+      const token = randomToken();
+      const statements = [
+        existing
+          ? options.db
+              .prepare(
+                `UPDATE users
+                 SET display_email = ?, role = ?, updated_at = ?
+                 WHERE id = ? AND state = 'invited'`,
+              )
+              .bind(email.display, input.role, occurredAt, userId)
+          : options.db
+              .prepare(
+                `INSERT INTO users
+                   (id, display_email, normalized_email, state, role, activated_at, created_at, updated_at)
+                 VALUES (?, ?, ?, 'invited', ?, NULL, ?, ?)`,
+              )
+              .bind(userId, email.display, email.normalized, input.role, occurredAt, occurredAt),
+        options.db.prepare("DELETE FROM invitations WHERE user_id = ?").bind(userId),
+        options.db
+          .prepare(
+            `INSERT INTO invitations (id, user_id, token_hash, issued_at, expires_at)
+             VALUES (?, ?, ?, ?, ?)`,
+          )
+          .bind(invitationId, userId, await hashToken(token), occurredAt, expiresAt.getTime()),
+        options.db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, actor_id, action, subject_id, occurred_at, metadata)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(
+            auditId,
+            input.actorId,
+            existing ? "invitation-reissue" : "invitation-issue",
+            userId,
+            occurredAt,
+            JSON.stringify({
+              ...(existing ? { fromRole: existing.role } : {}),
+              toRole: input.role,
+              toUserState: "invited",
+            }),
+          ),
+      ];
+      try {
+        await options.db.batch(statements);
+      } catch {
+        return { ok: false, kind: "user-active" };
+      }
+
+      return {
+        ok: true,
+        kind: "invitation",
+        invitation: {
+          user: {
+            id: userId,
+            email: email.display,
+            role: input.role,
+            state: "invited",
+          },
+          token,
+          expiresAt,
+        },
+      };
+    },
+
+    async listUsers(): Promise<readonly User[]> {
+      const result = await options.db
+        .prepare(
+          `SELECT id, display_email AS email, role, state
+           FROM users
+           ORDER BY created_at, id`,
+        )
+        .all<User>();
+      return result.results.map(toUser);
+    },
+
+    async getUser(userId: string): Promise<User | undefined> {
+      const user = await findUser(options.db, userId);
+      return user ? toUser(user) : undefined;
+    },
+
+    async acceptInvitation(
+      input: Readonly<{ token: string; password: string }>,
+    ): Promise<TokenFailure | PasswordFailure | UserResult> {
+      const occurredAt = now().getTime();
+      const tokenHash = await hashToken(input.token);
+      const invited = await options.db
+        .prepare(
+          `SELECT users.id, users.display_email AS email, users.role, users.state
+           FROM invitations
+           INNER JOIN users ON users.id = invitations.user_id
+           WHERE invitations.token_hash = ?
+             AND invitations.expires_at > ?
+             AND users.state = 'invited'`,
+        )
+        .bind(tokenHash, occurredAt)
+        .first<User>();
+      if (!invited) {
+        return { ok: false, kind: "invalid-or-expired-token" };
+      }
+      const verifier = await createPasswordVerifier(input.password);
+      if (!verifier) {
+        return { ok: false, kind: "invalid-password" };
+      }
+
+      try {
+        await options.db.batch([
+          options.db
+            .prepare("DELETE FROM invitations WHERE user_id = ? AND token_hash = ?")
+            .bind(invited.id, tokenHash),
+          options.db
+            .prepare(
+              `INSERT INTO credentials (user_id, verifier, updated_at)
+               VALUES (?, ?, ?)`,
+            )
+            .bind(invited.id, verifier, occurredAt),
+          options.db
+            .prepare(
+              `UPDATE users
+               SET state = 'active', activated_at = ?, updated_at = ?
+               WHERE id = ? AND state = 'invited'`,
+            )
+            .bind(occurredAt, occurredAt, invited.id),
+          options.db
+            .prepare(
+              `INSERT INTO audit_events
+                 (id, actor_id, action, subject_id, occurred_at, metadata)
+               VALUES (?, ?, 'invitation-accept', ?, ?, ?)`,
+            )
+            .bind(
+              randomId(),
+              invited.id,
+              invited.id,
+              occurredAt,
+              JSON.stringify({ fromUserState: "invited", toUserState: "active" }),
+            ),
+        ]);
+      } catch {
+        return { ok: false, kind: "invalid-or-expired-token" };
+      }
+
+      return {
+        ok: true,
+        kind: "user",
+        user: { ...toUser(invited), state: "active" },
+      };
+    },
+
+    async cancelInvitation(
+      input: Readonly<{ actorId: string; userId: string }>,
+    ): Promise<
+      | Readonly<{ ok: true; kind: "invitation-cancelled" }>
+      | Readonly<{ ok: false; kind: "invitation-not-found" }>
+    > {
+      const occurredAt = now().getTime();
+      const results = await options.db.batch([
+        options.db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, actor_id, action, subject_id, occurred_at, metadata)
+             SELECT ?, ?, 'invitation-cancel', id, ?, ?
+             FROM users
+             WHERE id = ? AND state = 'invited'`,
+          )
+          .bind(
+            randomId(),
+            input.actorId,
+            occurredAt,
+            JSON.stringify({ fromUserState: "invited" }),
+            input.userId,
+          ),
+        options.db
+          .prepare("DELETE FROM users WHERE id = ? AND state = 'invited'")
+          .bind(input.userId),
+      ]);
+      return (results[1]?.meta.changes ?? 0) > 0
+        ? { ok: true, kind: "invitation-cancelled" }
+        : { ok: false, kind: "invitation-not-found" };
+    },
+
+    async changeRole(
+      input: Readonly<{ actorId: string; userId: string; role: UserRole }>,
+    ): Promise<
+      | Readonly<{ ok: true; kind: "role-changed" | "unchanged" }>
+      | Readonly<{ ok: false; kind: "user-not-found" | "last-active-administrator" }>
+    > {
+      const stored = await findUser(options.db, input.userId);
+      if (!stored || stored.state === "invited") {
+        return { ok: false, kind: "user-not-found" };
+      }
+      if (stored.role === input.role) {
+        return { ok: true, kind: "unchanged" };
+      }
+
+      const occurredAt = now().getTime();
+      const guard = `id = ? AND role = ? AND state IN ('active', 'suspended')
+        AND NOT (
+          state = 'active'
+          AND role = 'administrator'
+          AND ? != 'administrator'
+          AND (
+            SELECT COUNT(*) FROM users
+            WHERE state = 'active' AND role = 'administrator'
+          ) = 1
+        )`;
+      const metadata = JSON.stringify({ fromRole: stored.role, toRole: input.role });
+      const results = await options.db.batch([
+        options.db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, actor_id, action, subject_id, occurred_at, metadata)
+             SELECT ?, ?, 'role-change', id, ?, ?
+             FROM users WHERE ${guard}`,
+          )
+          .bind(
+            randomId(),
+            input.actorId,
+            occurredAt,
+            metadata,
+            input.userId,
+            stored.role,
+            input.role,
+          ),
+        options.db
+          .prepare(`UPDATE users SET role = ?, updated_at = ? WHERE ${guard}`)
+          .bind(input.role, occurredAt, input.userId, stored.role, input.role),
+        options.db
+          .prepare(
+            `DELETE FROM sessions
+             WHERE user_id = ?
+               AND EXISTS (SELECT 1 FROM users WHERE id = ? AND role = ?)`,
+          )
+          .bind(input.userId, input.userId, input.role),
+      ]);
+      if ((results[1]?.meta.changes ?? 0) > 0) {
+        return { ok: true, kind: "role-changed" };
+      }
+      return {
+        ok: false,
+        kind:
+          stored.state === "active" && stored.role === "administrator"
+            ? "last-active-administrator"
+            : "user-not-found",
+      };
+    },
+
+    async suspendUser(
+      input: Readonly<{ actorId: string; userId: string }>,
+    ): Promise<
+      | Readonly<{ ok: true; kind: "user-suspended" }>
+      | Readonly<{ ok: false; kind: "user-not-found" | "last-active-administrator" }>
+    > {
+      const stored = await findUser(options.db, input.userId);
+      if (!stored || stored.state !== "active") {
+        return { ok: false, kind: "user-not-found" };
+      }
+      const occurredAt = now().getTime();
+      const guard = `id = ? AND state = 'active'
+        AND NOT (
+          role = 'administrator'
+          AND (
+            SELECT COUNT(*) FROM users
+            WHERE state = 'active' AND role = 'administrator'
+          ) = 1
+        )`;
+      const metadata = JSON.stringify({
+        fromUserState: "active",
+        toUserState: "suspended",
+      });
+      const results = await options.db.batch([
+        options.db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, actor_id, action, subject_id, occurred_at, metadata)
+             SELECT ?, ?, 'user-suspend', id, ?, ?
+             FROM users WHERE ${guard}`,
+          )
+          .bind(randomId(), input.actorId, occurredAt, metadata, input.userId),
+        options.db
+          .prepare(`UPDATE users SET state = 'suspended', updated_at = ? WHERE ${guard}`)
+          .bind(occurredAt, input.userId),
+        options.db
+          .prepare(
+            `DELETE FROM sessions
+             WHERE user_id = ?
+               AND EXISTS (SELECT 1 FROM users WHERE id = ? AND state = 'suspended')`,
+          )
+          .bind(input.userId, input.userId),
+      ]);
+      if ((results[1]?.meta.changes ?? 0) > 0) {
+        return { ok: true, kind: "user-suspended" };
+      }
+      return {
+        ok: false,
+        kind: stored.role === "administrator" ? "last-active-administrator" : "user-not-found",
+      };
+    },
+
+    async reactivateUser(
+      input: Readonly<{ actorId: string; userId: string }>,
+    ): Promise<
+      | Readonly<{ ok: true; kind: "user-reactivated"; user: User }>
+      | Readonly<{ ok: false; kind: "user-not-found" }>
+    > {
+      const stored = await findUser(options.db, input.userId);
+      if (!stored || stored.state !== "suspended") {
+        return { ok: false, kind: "user-not-found" };
+      }
+      const occurredAt = now().getTime();
+      const metadata = JSON.stringify({
+        fromUserState: "suspended",
+        toUserState: "active",
+      });
+      const results = await options.db.batch([
+        options.db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, actor_id, action, subject_id, occurred_at, metadata)
+             SELECT ?, ?, 'user-reactivate', id, ?, ?
+             FROM users WHERE id = ? AND state = 'suspended'`,
+          )
+          .bind(randomId(), input.actorId, occurredAt, metadata, input.userId),
+        options.db
+          .prepare(
+            `UPDATE users SET state = 'active', updated_at = ?
+             WHERE id = ? AND state = 'suspended'`,
+          )
+          .bind(occurredAt, input.userId),
+      ]);
+      if ((results[1]?.meta.changes ?? 0) === 0) {
+        return { ok: false, kind: "user-not-found" };
+      }
+      return {
+        ok: true,
+        kind: "user-reactivated",
+        user: { ...stored, state: "active" },
+      };
+    },
+
+    async issuePasswordReset(
+      input: Readonly<{ actorId: string; userId: string }>,
+    ): Promise<
+      PasswordResetResult | Readonly<{ ok: false; kind: "user-not-found" | "user-suspended" }>
+    > {
+      const user = await findUser(options.db, input.userId);
+      if (!user || user.state === "invited") {
+        return { ok: false, kind: "user-not-found" };
+      }
+      if (user.state === "suspended") {
+        return { ok: false, kind: "user-suspended" };
+      }
+      const occurredAt = now().getTime();
+      const expiresAt = new Date(occurredAt + passwordResetDuration);
+      const token = randomToken();
+      await options.db.batch([
+        options.db.prepare("DELETE FROM password_resets WHERE user_id = ?").bind(user.id),
+        options.db
+          .prepare(
+            `INSERT INTO password_resets (id, user_id, token_hash, issued_at, expires_at)
+             VALUES (?, ?, ?, ?, ?)`,
+          )
+          .bind(randomId(), user.id, await hashToken(token), occurredAt, expiresAt.getTime()),
+        options.db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, actor_id, action, subject_id, occurred_at, metadata)
+             VALUES (?, ?, 'password-reset-issue', ?, ?, '{}')`,
+          )
+          .bind(randomId(), input.actorId, user.id, occurredAt),
+      ]);
+      return {
+        ok: true,
+        kind: "password-reset",
+        passwordReset: { user, token, expiresAt },
+      };
+    },
+
+    async usePasswordReset(
+      input: Readonly<{ token: string; password: string }>,
+    ): Promise<
+      TokenFailure | PasswordFailure | Readonly<{ ok: true; kind: "password-reset"; user: User }>
+    > {
+      const occurredAt = now().getTime();
+      const tokenHash = await hashToken(input.token);
+      const user = await options.db
+        .prepare(
+          `SELECT users.id, users.display_email AS email, users.role, users.state
+           FROM password_resets
+           INNER JOIN users ON users.id = password_resets.user_id
+           WHERE password_resets.token_hash = ?
+             AND password_resets.expires_at > ?
+             AND users.state = 'active'`,
+        )
+        .bind(tokenHash, occurredAt)
+        .first<User>();
+      if (!user) {
+        return { ok: false, kind: "invalid-or-expired-token" };
+      }
+      const verifier = await createPasswordVerifier(input.password);
+      if (!verifier) {
+        return { ok: false, kind: "invalid-password" };
+      }
+
+      const tokenCondition = `EXISTS (
+        SELECT 1 FROM password_resets
+        WHERE user_id = ? AND token_hash = ? AND expires_at > ?
+      )`;
+      const results = await options.db.batch([
+        options.db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, actor_id, action, subject_id, occurred_at, metadata)
+             SELECT ?, id, 'password-reset-use', id, ?, '{}'
+             FROM users
+             WHERE id = ? AND state = 'active' AND ${tokenCondition}`,
+          )
+          .bind(randomId(), occurredAt, user.id, user.id, tokenHash, occurredAt),
+        options.db
+          .prepare(
+            `UPDATE credentials SET verifier = ?, updated_at = ?
+             WHERE user_id = ? AND ${tokenCondition}`,
+          )
+          .bind(verifier, occurredAt, user.id, user.id, tokenHash, occurredAt),
+        options.db
+          .prepare(
+            `DELETE FROM sessions
+             WHERE user_id = ? AND ${tokenCondition}`,
+          )
+          .bind(user.id, user.id, tokenHash, occurredAt),
+        options.db
+          .prepare(
+            `DELETE FROM password_resets
+             WHERE user_id = ? AND token_hash = ? AND expires_at > ?`,
+          )
+          .bind(user.id, tokenHash, occurredAt),
+      ]);
+      if ((results[3]?.meta.changes ?? 0) === 0) {
+        return { ok: false, kind: "invalid-or-expired-token" };
+      }
+      return { ok: true, kind: "password-reset", user };
+    },
+
+    async reauthenticate(
+      input: Readonly<{ token: string; password: string }>,
+    ): Promise<LoginFailure | SessionResult> {
+      const occurredAt = now().getTime();
+      const record = await options.db
+        .prepare(
+          `SELECT
+             sessions.id AS sessionId,
+             sessions.absolute_expires_at AS absoluteExpiresAt,
+             users.id,
+             users.display_email AS email,
+             users.role,
+             users.state,
+             credentials.verifier
+           FROM sessions
+           INNER JOIN users ON users.id = sessions.user_id
+           INNER JOIN credentials ON credentials.user_id = users.id
+           WHERE sessions.token_hash = ?
+             AND sessions.idle_expires_at > ?
+             AND sessions.absolute_expires_at > ?
+             AND users.state = 'active'`,
+        )
+        .bind(await hashToken(input.token), occurredAt, occurredAt)
+        .first<User & { sessionId: string; absoluteExpiresAt: number; verifier: string }>();
+      if (!record || !(await verifyPassword(input.password, record.verifier))) {
+        return { ok: false, kind: "invalid-credentials" };
+      }
+
+      const token = randomToken();
+      const csrfToken = randomToken();
+      await options.db
+        .prepare(
+          `UPDATE sessions
+           SET token_hash = ?, csrf_token_hash = ?, last_seen_at = ?,
+               idle_expires_at = ?, recent_authentication_at = ?
+           WHERE id = ?`,
+        )
+        .bind(
+          await hashToken(token),
+          await hashToken(csrfToken),
+          occurredAt,
+          Math.min(occurredAt + idleSessionDuration, record.absoluteExpiresAt),
+          occurredAt,
+          record.sessionId,
+        )
+        .run();
+      return {
+        ok: true,
+        kind: "session",
+        session: {
+          token,
+          csrfToken,
+          expiresAt: new Date(record.absoluteExpiresAt),
+          user: toUser(record),
+        },
+      };
+    },
+
+    async changePassword(
+      input: Readonly<{ userId: string; currentPassword: string; password: string }>,
+    ): Promise<PasswordFailure | LoginFailure | Readonly<{ ok: true; kind: "password-changed" }>> {
+      const record = await options.db
+        .prepare(
+          `SELECT
+             users.id,
+             users.display_email AS email,
+             users.role,
+             users.state,
+             credentials.verifier
+           FROM users
+           INNER JOIN credentials ON credentials.user_id = users.id
+           WHERE users.id = ? AND users.state = 'active'`,
+        )
+        .bind(input.userId)
+        .first<User & { verifier: string }>();
+      if (!record || !(await verifyPassword(input.currentPassword, record.verifier))) {
+        return { ok: false, kind: "invalid-credentials" };
+      }
+      const verifier = await createPasswordVerifier(input.password);
+      if (!verifier) {
+        return { ok: false, kind: "invalid-password" };
+      }
+
+      const occurredAt = now().getTime();
+      const results = await options.db.batch([
+        options.db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, actor_id, action, subject_id, occurred_at, metadata)
+             SELECT ?, id, 'password-change', id, ?, '{}'
+             FROM users WHERE id = ? AND state = 'active'`,
+          )
+          .bind(randomId(), occurredAt, record.id),
+        options.db
+          .prepare(
+            `UPDATE credentials SET verifier = ?, updated_at = ?
+             WHERE user_id = ?`,
+          )
+          .bind(verifier, occurredAt, record.id),
+        options.db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(record.id),
+      ]);
+      return (results[1]?.meta.changes ?? 0) > 0
+        ? { ok: true, kind: "password-changed" }
+        : { ok: false, kind: "invalid-credentials" };
+    },
+
+    async logout(token: string): Promise<Readonly<{ ok: true; kind: "logged-out" }>> {
+      await options.db
+        .prepare("DELETE FROM sessions WHERE token_hash = ?")
+        .bind(await hashToken(token))
+        .run();
+      return { ok: true, kind: "logged-out" };
+    },
+
+    async writeOperatorRecovery(
+      input: Readonly<{ email: string; token: string; expiresAt: Date }>,
+    ): Promise<void> {
+      const email = parseUserEmail(input.email);
+      if (!email) {
+        throw new Error("Active Administrator not found");
+      }
+      const user = await options.db
+        .prepare(
+          `SELECT id, display_email AS email, role, state
+           FROM users
+           WHERE normalized_email = ?
+             AND state = 'active'
+             AND role = 'administrator'`,
+        )
+        .bind(email.normalized)
+        .first<User>();
+      if (!user) {
+        throw new Error("Active Administrator not found");
+      }
+      const occurredAt = now().getTime();
+      await options.db.batch([
+        options.db.prepare("DELETE FROM operator_recovery WHERE singleton_key = 1"),
+        options.db
+          .prepare(
+            `INSERT INTO operator_recovery
+               (singleton_key, user_id, token_hash, created_at, expires_at)
+             VALUES (1, ?, ?, ?, ?)`,
+          )
+          .bind(user.id, await hashToken(input.token), occurredAt, input.expiresAt.getTime()),
+      ]);
+    },
+
+    async useOperatorRecovery(
+      input: Readonly<{ token: string; password: string }>,
+    ): Promise<
+      TokenFailure | PasswordFailure | Readonly<{ ok: true; kind: "operator-recovery"; user: User }>
+    > {
+      const occurredAt = now().getTime();
+      const tokenHash = await hashToken(input.token);
+      const user = await options.db
+        .prepare(
+          `SELECT users.id, users.display_email AS email, users.role, users.state
+           FROM operator_recovery
+           INNER JOIN users ON users.id = operator_recovery.user_id
+           WHERE operator_recovery.singleton_key = 1
+             AND operator_recovery.token_hash = ?
+             AND operator_recovery.expires_at > ?
+             AND users.state = 'active'
+             AND users.role = 'administrator'`,
+        )
+        .bind(tokenHash, occurredAt)
+        .first<User>();
+      if (!user) {
+        return { ok: false, kind: "invalid-or-expired-token" };
+      }
+      const verifier = await createPasswordVerifier(input.password);
+      if (!verifier) {
+        return { ok: false, kind: "invalid-password" };
+      }
+      const recoveryCondition = `EXISTS (
+        SELECT 1 FROM operator_recovery
+        WHERE singleton_key = 1
+          AND user_id = ?
+          AND token_hash = ?
+          AND expires_at > ?
+      )`;
+      const results = await options.db.batch([
+        options.db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, actor_id, action, subject_id, occurred_at, metadata)
+             SELECT ?, 'system', 'operator-recovery', id, ?, '{}'
+             FROM users
+             WHERE id = ? AND state = 'active' AND role = 'administrator'
+               AND ${recoveryCondition}`,
+          )
+          .bind(randomId(), occurredAt, user.id, user.id, tokenHash, occurredAt),
+        options.db
+          .prepare(
+            `UPDATE credentials SET verifier = ?, updated_at = ?
+             WHERE user_id = ? AND ${recoveryCondition}`,
+          )
+          .bind(verifier, occurredAt, user.id, user.id, tokenHash, occurredAt),
+        options.db
+          .prepare(
+            `DELETE FROM sessions
+             WHERE user_id = ? AND ${recoveryCondition}`,
+          )
+          .bind(user.id, user.id, tokenHash, occurredAt),
+        options.db
+          .prepare(
+            `DELETE FROM operator_recovery
+             WHERE singleton_key = 1 AND user_id = ?
+               AND token_hash = ? AND expires_at > ?`,
+          )
+          .bind(user.id, tokenHash, occurredAt),
+      ]);
+      if ((results[3]?.meta.changes ?? 0) === 0) {
+        return { ok: false, kind: "invalid-or-expired-token" };
+      }
+      return { ok: true, kind: "operator-recovery", user };
+    },
+  };
+}
+
+function parseUserEmail(value: string) {
+  const display = value.trim();
+  if (
+    display.length < 3 ||
+    display.length > 254 ||
+    !/^[\x21-\x7e]+@[A-Za-z0-9.-]+$/.test(display)
+  ) {
+    return undefined;
+  }
+  return { display, normalized: display.toLowerCase() };
+}
+
+async function hashToken(token: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function createPasswordVerifier(password: string) {
+  const normalized = password.normalize("NFC");
+  const length = Array.from(normalized).length;
+  if (length < 15 || length > 128 || blockedPasswords.has(normalized)) {
+    return undefined;
+  }
+
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const tag = await scryptAsync(new TextEncoder().encode(normalized), salt);
+  const parameters = `N=${scryptPolicy.N},r=${scryptPolicy.r},p=${scryptPolicy.p},l=${scryptPolicy.outputLength}`;
+  return `scrypt$v=1$${parameters}$${Buffer.from(salt).toString("base64url")}$${Buffer.from(tag).toString("base64url")}`;
+}
+
+async function verifyPassword(password: string, verifier: string) {
+  const parsed = parseVerifier(verifier);
+  if (!parsed) {
+    return false;
+  }
+  const normalized = password.normalize("NFC");
+  const actual = await scryptAsync(new TextEncoder().encode(normalized), parsed.salt);
+  return actual.length === parsed.tag.length && timingSafeEqual(actual, parsed.tag);
+}
+
+function parseVerifier(verifier: string) {
+  const match = /^scrypt\$v=1\$N=32768,r=8,p=1,l=32\$([A-Za-z0-9_-]+)\$([A-Za-z0-9_-]+)$/.exec(
+    verifier,
+  );
+  if (!match?.[1] || !match[2]) {
+    return undefined;
+  }
+  const salt = Buffer.from(match[1], "base64url");
+  const tag = Buffer.from(match[2], "base64url");
+  if (salt.length !== 16 || tag.length !== scryptPolicy.outputLength) {
+    return undefined;
+  }
+  return { salt: new Uint8Array(salt), tag: new Uint8Array(tag) };
+}
+
+function createRandomToken() {
+  return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+}
+
+function toUser(record: User): User {
+  return {
+    id: record.id,
+    email: record.email,
+    role: record.role,
+    state: record.state,
+  };
+}
+
+async function findUser(db: D1Database, userId: string) {
+  return db
+    .prepare(
+      `SELECT id, display_email AS email, role, state
+       FROM users WHERE id = ?`,
+    )
+    .bind(userId)
+    .first<User>();
+}
+
+function scryptAsync(password: Uint8Array, salt: Uint8Array) {
+  return new Promise<Uint8Array>((resolve, reject) => {
+    scrypt(
+      password,
+      salt,
+      scryptPolicy.outputLength,
+      {
+        N: scryptPolicy.N,
+        r: scryptPolicy.r,
+        p: scryptPolicy.p,
+        maxmem: scryptPolicy.maxmem,
+      },
+      (error, derivedKey) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(new Uint8Array(derivedKey));
+        }
+      },
+    );
+  });
+}
