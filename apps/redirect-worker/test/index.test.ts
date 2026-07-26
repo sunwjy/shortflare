@@ -98,7 +98,10 @@ describe("redirect worker", () => {
     expect(firstResponse.status).toBe(302);
     await firstContext.waitForPending();
 
-    await links.execute({ kind: "disable", linkId: created.link.id }, { id: "system:test" });
+    await links.execute(
+      { kind: "disable", linkId: created.link.id, expectedRevision: 0 },
+      { id: "system:test" },
+    );
     const secondResponse = await app.request(
       "http://short.test/Cached?source=second",
       {},
@@ -190,10 +193,18 @@ describe("redirect worker", () => {
     ) {
       throw new Error("expected Link fixtures to be created");
     }
-    await links.execute({ kind: "disable", linkId: disabled.link.id }, actor);
-    await links.execute({ kind: "archive", linkId: archived.link.id }, actor);
-    await links.execute({ kind: "archive", linkId: reserved.link.id }, actor);
-    await links.execute({ kind: "permanently-delete", linkId: reserved.link.id }, actor);
+    await links.execute({ kind: "disable", linkId: disabled.link.id, expectedRevision: 0 }, actor);
+    await links.execute({ kind: "archive", linkId: archived.link.id, expectedRevision: 0 }, actor);
+    await links.execute({ kind: "archive", linkId: reserved.link.id, expectedRevision: 0 }, actor);
+    await links.execute(
+      {
+        kind: "permanently-delete",
+        linkId: reserved.link.id,
+        expectedRevision: 1,
+        confirmationAlias: reserved.link.alias,
+      },
+      actor,
+    );
 
     const results = await Promise.all(
       (

@@ -5,6 +5,7 @@ export type {
   Alias,
   CreateLinksOptions,
   DestinationVersion,
+  DestinationVersionPage,
   Link,
   LinkCommand,
   LinkMutationContext,
@@ -19,9 +20,12 @@ export type {
   PersistedLinkMutation,
   RedirectDecision,
   ReservedAlias,
+  ReservedAliasPage,
 } from "./types";
 export {
+  encodeDestinationVersionCursor,
   encodeListCursor,
+  encodeReservedAliasCursor,
   foldCase,
   mergeQuery as mergeDestinationQuery,
   parseAlias,

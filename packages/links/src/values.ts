@@ -55,13 +55,109 @@ export function foldCase(value: string): string {
     .replaceAll("\u03c2", "\u03c3");
 }
 
-export function encodeListCursor(cursor: NonNullable<PersistenceListQuery["cursor"]>): string {
-  const json = JSON.stringify({
+export function encodeListCursor(
+  search: string,
+  states: readonly string[],
+  cursor: NonNullable<PersistenceListQuery["cursor"]>,
+): string {
+  return encodeCursor({
     v: 1,
-    updatedAt: cursor.updatedAt.getTime(),
+    kind: "links",
+    search,
+    states,
+    createdAt: cursor.createdAt.getTime(),
     id: cursor.id,
   });
-  const bytes = new TextEncoder().encode(json);
+}
+
+export function decodeListCursor(
+  value: string,
+  search: string,
+  states: readonly string[],
+): NonNullable<PersistenceListQuery["cursor"]> | null {
+  const parsed = decodeCursor(value);
+  const createdAt = parseCursorDate(parsed?.createdAt);
+  if (
+    parsed === null ||
+    parsed.v !== 1 ||
+    parsed.kind !== "links" ||
+    parsed.search !== search ||
+    JSON.stringify(parsed.states) !== JSON.stringify(states) ||
+    createdAt === null ||
+    typeof parsed.id !== "string" ||
+    parsed.id.length === 0
+  ) {
+    return null;
+  }
+  return {
+    createdAt,
+    id: parsed.id,
+  };
+}
+
+export function encodeDestinationVersionCursor(linkId: string, versionNumber: number): string {
+  return encodeCursor({ v: 1, kind: "destination-versions", linkId, versionNumber });
+}
+
+export function decodeDestinationVersionCursor(
+  value: string,
+  linkId: string,
+): Readonly<{ versionNumber: number }> | null {
+  const parsed = decodeCursor(value);
+  if (
+    parsed === null ||
+    parsed.v !== 1 ||
+    parsed.kind !== "destination-versions" ||
+    parsed.linkId !== linkId ||
+    !Number.isSafeInteger(parsed.versionNumber) ||
+    (parsed.versionNumber as number) < 1
+  ) {
+    return null;
+  }
+  return { versionNumber: parsed.versionNumber as number };
+}
+
+export function encodeReservedAliasCursor(
+  search: string,
+  cursor: Readonly<{ reservedAt: Date; alias: Alias }>,
+): string {
+  return encodeCursor({
+    v: 1,
+    kind: "reserved-aliases",
+    search,
+    reservedAt: cursor.reservedAt.getTime(),
+    alias: cursor.alias,
+  });
+}
+
+export function decodeReservedAliasCursor(
+  value: string,
+  search: string,
+): Readonly<{ reservedAt: Date; alias: Alias }> | null {
+  const parsed = decodeCursor(value);
+  const alias = typeof parsed?.alias === "string" ? parseAlias(parsed.alias) : null;
+  const reservedAt = parseCursorDate(parsed?.reservedAt);
+  if (
+    parsed === null ||
+    parsed.v !== 1 ||
+    parsed.kind !== "reserved-aliases" ||
+    parsed.search !== search ||
+    reservedAt === null ||
+    alias === null
+  ) {
+    return null;
+  }
+  return { reservedAt, alias };
+}
+
+function parseCursorDate(value: unknown): Date | null {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) return null;
+  const date = new Date(value as number);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function encodeCursor(value: Record<string, unknown>): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
   let binary = "";
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
@@ -69,33 +165,15 @@ export function encodeListCursor(cursor: NonNullable<PersistenceListQuery["curso
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
-export function decodeListCursor(
-  value: string,
-): NonNullable<PersistenceListQuery["cursor"]> | null {
+function decodeCursor(value: string): Record<string, unknown> | null {
   try {
     const padding = "=".repeat((4 - (value.length % 4)) % 4);
     const binary = atob(value.replaceAll("-", "+").replaceAll("_", "/") + padding);
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
     const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      !("v" in parsed) ||
-      parsed.v !== 1 ||
-      !("updatedAt" in parsed) ||
-      !Number.isSafeInteger(parsed.updatedAt) ||
-      (parsed.updatedAt as number) < 0 ||
-      !("id" in parsed) ||
-      typeof parsed.id !== "string" ||
-      parsed.id.length === 0
-    ) {
-      return null;
-    }
-
-    return {
-      updatedAt: new Date(parsed.updatedAt as number),
-      id: parsed.id,
-    };
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
