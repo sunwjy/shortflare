@@ -6,6 +6,8 @@ Locked identity decisions:
 
 - `Flare` red is Shortflare's permanent brand and action color.
 - Accessibility is a token-level requirement, not a final visual check.
+- UI components are source-owned through shadcn/ui's `base-nova` style and use
+  Base UI for accessible behavior.
 
 ## Design read
 
@@ -64,7 +66,7 @@ the Alias or server-derived short URL before the current Destination.
 
 Recommended hierarchy:
 
-1. title, when present;
+1. title;
 2. short URL with the Alias emphasized;
 3. current Destination;
 4. state, Human Clicks, and updated time.
@@ -275,9 +277,26 @@ above the document:
 
 ### Icons
 
-Use one outlined icon family at 1.75px stroke weight. Default sizes are 16px for
-inline actions, 18px for controls, and 20px for navigation. Icons always have an
-accessible name when no text label is visible.
+Use Lucide React as the single outlined icon family at 1.75px stroke weight.
+Default sizes are 16px for inline actions, 18px for controls, and 20px for
+navigation. Icons always have an accessible name when no text label is visible.
+
+### Component foundation
+
+Use shadcn/ui's `base-nova` style as the source-owned component layer, with Base
+UI providing accessible interaction primitives. Tailwind CSS consumes the
+Shortflare tokens in this document; generated defaults do not override the
+accepted color, typography, spacing, shape, or contrast contracts.
+
+Do not mix a second component or theming system into the application. See
+ADR-0011.
+
+### Theme preference
+
+Support `Light`, `Dark`, and `System` preferences. The initial preference is
+`System`, the browser stores an explicit choice locally, and the same preference
+applies to authentication, one-time token, and signed-in Management screens.
+Theme preference is not User or Instance data in the MVP.
 
 ## Layout system
 
@@ -289,9 +308,12 @@ Desktop uses a two-part shell:
 - a fluid work area capped at 1440px for content, while the canvas may extend
   edge to edge.
 
-The rail contains Links, Analytics, Users, and Instance settings according to
-the User's role. The create action belongs in the work-area command bar, not in
-the navigation rail.
+The rail contains only implemented areas available to the User's role. In the
+Link management milestone it contains Links for every User and Users for
+Administrators. Analytics and Instance settings appear only when those product
+areas exist. Personal Security and Log out belong to the User menu rather than
+the rail. The create action belongs in the work-area command bar, not in the
+navigation rail.
 
 At widths below 768px:
 
@@ -332,7 +354,7 @@ The Link row is the central Shortflare component.
 Desktop anatomy:
 
 ```text
-[state] [title or Alias                       ] [Human Clicks] [updated] [actions]
+[state] [title                                ] [Human Clicks] [updated] [actions]
         [short URL] -> [current Destination  ]
 ```
 
@@ -351,7 +373,7 @@ Mobile anatomy:
 
 ```text
 [state label]                  [actions]
-[title or Alias]
+[title]
 [short URL] [copy]
 [Destination]
 [Human Clicks] [updated]
@@ -421,6 +443,7 @@ For Link creation:
 - Destination is first;
 - generated Alias is the default;
 - custom Alias is a progressive option;
+- title is required;
 - the resulting short URL is shown before submission when it can be derived.
 
 ### Panels and cards
