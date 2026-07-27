@@ -3,12 +3,18 @@ import { useEffect, useMemo, useState } from "react";
 import { apiRequest } from "./api";
 import { LoginScreen, TokenPasswordScreen } from "./auth-screens";
 import { ManagementApp } from "./management-app";
+import { applyTheme, readTheme, type Theme } from "./theme";
 import type { Session, TokenRoute, User } from "./types";
 
 export function App() {
   const tokenRoute = useMemo(readTokenRoute, []);
   const [session, setSession] = useState<Session>();
   const [loading, setLoading] = useState(true);
+  const [theme, setTheme] = useState<Theme>(readTheme);
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     if (tokenRoute) {
@@ -24,7 +30,7 @@ export function App() {
   }, [tokenRoute]);
 
   if (tokenRoute) {
-    return <TokenPasswordScreen route={tokenRoute} />;
+    return <TokenPasswordScreen route={tokenRoute} theme={theme} onTheme={setTheme} />;
   }
   if (loading) {
     return (
@@ -34,9 +40,11 @@ export function App() {
     );
   }
   if (!session) {
-    return <LoginScreen onLogin={setSession} />;
+    return <LoginScreen onLogin={setSession} theme={theme} onTheme={setTheme} />;
   }
-  return <ManagementApp session={session} onSession={setSession} />;
+  return (
+    <ManagementApp session={session} onSession={setSession} theme={theme} onTheme={setTheme} />
+  );
 }
 
 function readTokenRoute(): TokenRoute | undefined {

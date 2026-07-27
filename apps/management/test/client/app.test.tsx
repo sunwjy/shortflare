@@ -90,12 +90,33 @@ describe("Management App", () => {
 
     expect(await screen.findByRole("heading", { name: "Links" })).toBeInTheDocument();
     expect(await screen.findByText("Documentation")).toBeInTheDocument();
-    expect(screen.getByText("https://short.test/Docs")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open Documentation" })).toHaveTextContent("/Docs");
     const row = screen.getByText("Documentation").closest("article");
     expect(row).not.toBeNull();
     expect(within(row as HTMLElement).getByText("Active")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Link" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+  });
+
+  it("redirects a Viewer who opens the create URL directly", async () => {
+    history.replaceState(null, "", "/links/new");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/api/internal/auth/session") return Response.json(viewerSession);
+        if (url.pathname === "/api/internal/links") {
+          return Response.json({ ok: true, items: [], nextCursor: null });
+        }
+        return notFound();
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Links" })).toBeVisible();
+    expect(location.pathname).toBe("/links");
+    expect(screen.queryByRole("heading", { name: "Create Link" })).not.toBeInTheDocument();
   });
 
   it("lets a Member search and filter the Link collection, then copy a short URL", async () => {
@@ -286,6 +307,44 @@ describe("Management App", () => {
     expect(screen.queryByDisplayValue("My documentation")).not.toBeInTheDocument();
   });
 
+  it("warns before SPA navigation discards a Member's edit", async () => {
+    history.replaceState(null, "", "/links/link-docs");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/api/internal/auth/session") return Response.json(memberSession);
+        if (url.pathname === "/api/internal/links") {
+          return Response.json({ ok: true, items: [documentationLink], nextCursor: null });
+        }
+        if (url.pathname === "/api/internal/links/link-docs") {
+          return Response.json({ ok: true, link: documentationLink });
+        }
+        if (url.pathname.endsWith("/destination-versions")) {
+          return Response.json({
+            ok: true,
+            items: [],
+            nextCursor: null,
+            currentVersionNumber: 2,
+          });
+        }
+        return notFound();
+      }),
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await screen.findByRole("heading", { name: "Documentation" });
+    await user.click(screen.getByRole("button", { name: "Edit Link" }));
+    await user.clear(screen.getByRole("textbox", { name: "Title" }));
+    await user.type(screen.getByRole("textbox", { name: "Title" }), "Unsaved");
+    await user.click(screen.getByRole("link", { name: "Security" }));
+
+    expect(confirm).toHaveBeenCalledWith("Discard your unsaved changes?");
+    expect(location.pathname).toBe("/links/link-docs");
+  });
+
   it("lets a Member disable an Active Link from its detail", async () => {
     history.replaceState(null, "", "/links/link-docs");
     vi.stubGlobal(
@@ -323,7 +382,11 @@ describe("Management App", () => {
 
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Documentation" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Disable Link" }));
+    await user.click(
+      within(screen.getByRole("complementary", { name: "Link detail" })).getByRole("button", {
+        name: "Disable Link",
+      }),
+    );
 
     expect(await screen.findByText("Link disabled.")).toBeVisible();
     expect(

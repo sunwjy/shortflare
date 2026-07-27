@@ -15,12 +15,19 @@ import {
   Outlet,
   redirect,
   RouterProvider,
+  useBlocker,
+  useMatchRoute,
 } from "@tanstack/react-router";
 import {
   Archive,
   CheckCircle2,
   Copy,
   Link2,
+  LockKeyhole,
+  LogOut,
+  Mail,
+  Menu,
+  MoreHorizontal,
   PauseCircle,
   Search,
   Shield,
@@ -33,6 +40,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { ApiError, apiRequest } from "./api";
 import { Button } from "./components/ui/button";
 import { Dialog } from "./components/ui/dialog";
+import type { Theme } from "./theme";
 import type {
   DestinationVersionDto,
   LinkDto,
@@ -49,8 +57,6 @@ type ManagementRouterContext = Readonly<{
   theme: Theme;
   setTheme: (theme: Theme) => void;
 }>;
-
-type Theme = "light" | "dark" | "system";
 type LinkSearch = Readonly<{
   search?: string;
   state: readonly LinkState[];
@@ -81,6 +87,11 @@ const linksRoute = createRoute({
 const createLinkRoute = createRoute({
   getParentRoute: () => linksRoute,
   path: "new",
+  beforeLoad: ({ context }) => {
+    if (context.session.user.role === "viewer") {
+      throw redirect({ to: "/links", search: { state: [] } });
+    }
+  },
   component: CreateLinkPanel,
 });
 
@@ -127,9 +138,13 @@ declare module "@tanstack/react-router" {
 export function ManagementApp({
   session,
   onSession,
+  theme,
+  onTheme,
 }: Readonly<{
   session: Session;
   onSession: (session: Session | undefined) => void;
+  theme: Theme;
+  onTheme: (theme: Theme) => void;
 }>) {
   const [queryClient] = useState(
     () =>
@@ -141,25 +156,29 @@ export function ManagementApp({
       }),
   );
   const [router] = useState(createManagementRouter);
-  const [theme, setTheme] = useState<Theme>(() => readTheme());
-
-  useEffect(() => {
-    window.localStorage.setItem("shortflare-theme", theme);
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
-
   return (
     <QueryClientProvider client={queryClient}>
       <RouterProvider
         router={router}
-        context={{ session, onSession, queryClient, theme, setTheme }}
+        context={{ session, onSession, queryClient, theme, setTheme: onTheme }}
       />
     </QueryClientProvider>
   );
 }
 
 function AppShell() {
-  const { session, theme, setTheme } = rootRoute.useRouteContext();
+  const { session, onSession, theme, setTheme } = rootRoute.useRouteContext();
+  const [mobileMenu, setMobileMenu] = useState(false);
+
+  async function logout() {
+    await apiRequest("/api/internal/auth/logout", {
+      method: "POST",
+      csrfToken: session.csrfToken,
+      body: {},
+    }).catch(() => undefined);
+    onSession(undefined);
+  }
+
   return (
     <div className="app-shell">
       <aside className="navigation-rail">
@@ -180,30 +199,86 @@ function AppShell() {
           )}
         </nav>
         <div className="user-summary">
-          <span>{session.user.email}</span>
-          <small>{roleLabel(session.user.role)}</small>
-          <Link to="/security" activeProps={{ "aria-current": "page" }}>
-            <Shield aria-hidden="true" size={18} strokeWidth={1.75} />
-            Security
-          </Link>
-          <label>
-            Theme
-            <select
-              aria-label="Theme"
-              value={theme}
-              onChange={(event) => setTheme(event.target.value as Theme)}
-            >
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </label>
+          <details className="user-menu">
+            <summary>
+              <span>{session.user.email}</span>
+              <small>{roleLabel(session.user.role)}</small>
+            </summary>
+            <div className="user-menu__popup">
+              <Link to="/security" activeProps={{ "aria-current": "page" }}>
+                <Shield aria-hidden="true" size={18} strokeWidth={1.75} />
+                Security
+              </Link>
+              <ThemeField theme={theme} onTheme={setTheme} />
+              <Button variant="quiet" onClick={() => void logout()}>
+                <LogOut aria-hidden="true" size={18} strokeWidth={1.75} />
+                Log out
+              </Button>
+            </div>
+          </details>
         </div>
+        <Button
+          className="mobile-menu-trigger"
+          variant="quiet"
+          size="icon"
+          aria-label="Open navigation"
+          onClick={() => setMobileMenu(true)}
+        >
+          <Menu aria-hidden="true" size={22} strokeWidth={1.75} />
+        </Button>
       </aside>
       <main className="work-area">
         <Outlet />
       </main>
+      <Dialog
+        open={mobileMenu}
+        onOpenChange={setMobileMenu}
+        title="Navigation"
+        description={`${session.user.email} · ${roleLabel(session.user.role)}`}
+      >
+        <nav className="mobile-navigation" aria-label="Mobile navigation">
+          <Link to="/links" search={{ state: [] }} onClick={() => setMobileMenu(false)}>
+            <Link2 aria-hidden="true" size={20} strokeWidth={1.75} />
+            Links
+          </Link>
+          {session.user.role === "administrator" && (
+            <Link to="/users" onClick={() => setMobileMenu(false)}>
+              <Users aria-hidden="true" size={20} strokeWidth={1.75} />
+              Users
+            </Link>
+          )}
+          <Link to="/security" onClick={() => setMobileMenu(false)}>
+            <Shield aria-hidden="true" size={20} strokeWidth={1.75} />
+            Security
+          </Link>
+          <ThemeField theme={theme} onTheme={setTheme} />
+          <Button variant="quiet" onClick={() => void logout()}>
+            <LogOut aria-hidden="true" size={18} strokeWidth={1.75} />
+            Log out
+          </Button>
+        </nav>
+      </Dialog>
     </div>
+  );
+}
+
+function ThemeField({
+  theme,
+  onTheme,
+}: Readonly<{ theme: Theme; onTheme: (theme: Theme) => void }>) {
+  return (
+    <label className="theme-field">
+      Theme
+      <select
+        aria-label="Theme"
+        value={theme}
+        onChange={(event) => onTheme(event.target.value as Theme)}
+      >
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
   );
 }
 
@@ -516,6 +591,34 @@ function LinksPage() {
             {links.isError && (
               <p className="collection-banner">Links could not be loaded. Try again.</p>
             )}
+            {links.data?.pages.flatMap((page) => page.items).length === 0 && (
+              <div className="empty-state">
+                <h2>
+                  {search.search || search.state.length ? "No matching Links" : "No Links yet"}
+                </h2>
+                <p>
+                  {search.search || search.state.length
+                    ? "Try a different search or state filter."
+                    : "Create the first Link to begin shortening paths."}
+                </p>
+                {search.search || search.state.length ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => void navigate({ search: { state: [] }, replace: true })}
+                  >
+                    Clear filters
+                  </Button>
+                ) : (
+                  session.user.role !== "viewer" && (
+                    <Button
+                      onClick={() => void navigate({ to: "/links/new", search: { state: [] } })}
+                    >
+                      Create Link
+                    </Button>
+                  )
+                )}
+              </div>
+            )}
             {links.data?.pages
               .flatMap((page) => page.items)
               .map((link) => (
@@ -546,14 +649,21 @@ function ReservedAliases() {
   const [search, setSearch] = useState("");
   const [submittedSearch, setSubmittedSearch] = useState("");
   const [selected, setSelected] = useState<ReservedAliasDto>();
-  const aliases = useQuery({
+  const aliases = useInfiniteQuery({
     queryKey: ["reserved-aliases", submittedSearch],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       apiRequest<Page<ReservedAliasDto>>(
         `/api/internal/reserved-aliases${
-          submittedSearch ? `?search=${encodeURIComponent(submittedSearch)}` : ""
+          submittedSearch || pageParam
+            ? `?${new URLSearchParams({
+                ...(submittedSearch ? { search: submittedSearch } : {}),
+                ...(pageParam ? { cursor: pageParam } : {}),
+              })}`
+            : ""
         }`,
       ),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
 
   return (
@@ -580,30 +690,38 @@ function ReservedAliases() {
       </form>
       <div className="collection">
         {aliases.isPending && <LinkRowsSkeleton />}
-        {aliases.data?.items.length === 0 && (
+        {aliases.data?.pages.flatMap((page) => page.items).length === 0 && (
           <div className="empty-state">
             <h2>No Reserved Aliases</h2>
             <p>Permanently deleted Link aliases will be protected here.</p>
           </div>
         )}
-        {aliases.data?.items.map((alias) => (
-          <article className="link-row reserved-row" key={alias.alias}>
-            <div className="link-identity">
-              <strong>{alias.alias}</strong>
-              <span className="link-route">{alias.shortUrl}</span>
-            </div>
-            <time dateTime={alias.reservedAt}>
-              Reserved{" "}
-              {new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
-                new Date(alias.reservedAt),
-              )}
-            </time>
-            <Button variant="danger" onClick={() => setSelected(alias)}>
-              Release Alias
-            </Button>
-          </article>
-        ))}
+        {aliases.data?.pages
+          .flatMap((page) => page.items)
+          .map((alias) => (
+            <article className="link-row reserved-row" key={alias.alias}>
+              <div className="link-identity">
+                <strong>{alias.alias}</strong>
+                <span className="link-route">{alias.shortUrl}</span>
+              </div>
+              <time dateTime={alias.reservedAt}>Reserved {formatDate(alias.reservedAt)}</time>
+              <Button variant="danger" onClick={() => setSelected(alias)}>
+                Release Alias
+              </Button>
+            </article>
+          ))}
       </div>
+      {aliases.hasNextPage && (
+        <div className="form-actions">
+          <Button
+            variant="secondary"
+            disabled={aliases.isFetchingNextPage}
+            onClick={() => void aliases.fetchNextPage()}
+          >
+            {aliases.isFetchingNextPage ? "Loading…" : "Load more"}
+          </Button>
+        </div>
+      )}
       {selected && (
         <SensitiveAliasDialog
           open
@@ -781,12 +899,16 @@ function LinkDetailPanel() {
     queryFn: () =>
       apiRequest<{ ok: true; link: LinkDto }>(`/api/internal/links/${encodeURIComponent(linkId)}`),
   });
-  const versions = useQuery({
+  const versions = useInfiniteQuery({
     queryKey: ["destination-versions", linkId],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       apiRequest<Page<DestinationVersionDto> & Readonly<{ currentVersionNumber: number }>>(
-        `/api/internal/links/${encodeURIComponent(linkId)}/destination-versions`,
+        `/api/internal/links/${encodeURIComponent(linkId)}/destination-versions${
+          pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ""
+        }`,
       ),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
   const edit = useMutation({
     mutationFn: () =>
@@ -812,7 +934,13 @@ function LinkDetailPanel() {
       ]);
     },
     onError: async (error) => {
-      if (!(error instanceof ApiError) || error.body.kind !== "link-conflict") return;
+      if (!(error instanceof ApiError) || error.body.kind !== "link-conflict") {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["link", linkId] }),
+          queryClient.invalidateQueries({ queryKey: ["destination-versions", linkId] }),
+        ]);
+        return;
+      }
       const latest = await apiRequest<{ ok: true; link: LinkDto }>(
         `/api/internal/links/${encodeURIComponent(linkId)}`,
       );
@@ -835,6 +963,12 @@ function LinkDetailPanel() {
       setNotice(`Link ${updatedLink.state === "disabled" ? "disabled" : updatedLink.state}.`);
       await queryClient.invalidateQueries({ queryKey: ["links"] });
     },
+    onError: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["link", linkId] }),
+        queryClient.invalidateQueries({ queryKey: ["links"] }),
+      ]);
+    },
   });
 
   useEffect(() => {
@@ -843,15 +977,14 @@ function LinkDetailPanel() {
     setDestinationDraft(link.data.link.destination.url);
   }, [editing, link.data]);
 
-  useEffect(() => {
-    if (!editing || !link.data) return;
-    const dirty =
-      titleDraft !== link.data.link.title || destinationDraft !== link.data.link.destination.url;
-    if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [destinationDraft, editing, link.data, titleDraft]);
+  const dirty =
+    Boolean(editing && link.data) &&
+    (titleDraft !== link.data?.link.title || destinationDraft !== link.data?.link.destination.url);
+  useBlocker({
+    disabled: !dirty,
+    enableBeforeUnload: dirty,
+    shouldBlockFn: () => !window.confirm("Discard your unsaved changes?"),
+  });
 
   function beginEditing() {
     if (!link.data) return;
@@ -872,12 +1005,12 @@ function LinkDetailPanel() {
   }
 
   function closeDetail() {
-    const dirty =
-      editing &&
-      link.data &&
-      (titleDraft !== link.data.link.title || destinationDraft !== link.data.link.destination.url);
-    if (dirty && !window.confirm("Discard your unsaved changes?")) return;
     void navigate({ to: "/links", search });
+  }
+
+  function reviewChanges() {
+    const field = conflict && titleDraft !== conflict.title ? "edit-title" : "edit-destination";
+    document.getElementById(field)?.focus();
   }
 
   return (
@@ -937,7 +1070,7 @@ function LinkDetailPanel() {
                     )}
                   </div>
                   <div className="form-actions">
-                    <Button type="button" variant="secondary">
+                    <Button type="button" variant="secondary" onClick={reviewChanges}>
                       Review changes
                     </Button>
                     <Button type="button" variant="quiet" onClick={discardMine}>
@@ -1011,15 +1144,26 @@ function LinkDetailPanel() {
               <section className="detail-section">
                 <h3>Destination Versions</h3>
                 {versions.isPending && <p>Loading versions…</p>}
-                {versions.data?.items.length === 0 && (
+                {versions.data?.pages.flatMap((page) => page.items).length === 0 && (
                   <p>Earlier Destination Versions will appear here after the first edit.</p>
                 )}
-                {versions.data?.items.map((version) => (
-                  <div className="version-row" key={version.id}>
-                    <strong>Version {version.versionNumber}</strong>
-                    <span>{version.url}</span>
-                  </div>
-                ))}
+                {versions.data?.pages
+                  .flatMap((page) => page.items)
+                  .map((version) => (
+                    <div className="version-row" key={version.id}>
+                      <strong>Version {version.versionNumber}</strong>
+                      <span>{version.url}</span>
+                    </div>
+                  ))}
+                {versions.hasNextPage && (
+                  <Button
+                    variant="secondary"
+                    disabled={versions.isFetchingNextPage}
+                    onClick={() => void versions.fetchNextPage()}
+                  >
+                    {versions.isFetchingNextPage ? "Loading…" : "Load more Versions"}
+                  </Button>
+                )}
               </section>
               {session.user.role !== "viewer" && (
                 <section className="detail-section">
@@ -1038,7 +1182,7 @@ function LinkDetailPanel() {
                         <Button variant="secondary" onClick={() => stateChange.mutate("disable")}>
                           Disable Link
                         </Button>
-                        <Button variant="danger" onClick={() => stateChange.mutate("archive")}>
+                        <Button variant="secondary" onClick={() => stateChange.mutate("archive")}>
                           Archive Link
                         </Button>
                       </>
@@ -1048,7 +1192,7 @@ function LinkDetailPanel() {
                         <Button onClick={() => stateChange.mutate("activate")}>
                           Activate Link
                         </Button>
-                        <Button variant="danger" onClick={() => stateChange.mutate("archive")}>
+                        <Button variant="secondary" onClick={() => stateChange.mutate("archive")}>
                           Archive Link
                         </Button>
                       </>
@@ -1072,7 +1216,7 @@ function LinkDetailPanel() {
                   open
                   alias={link.data.link.alias}
                   title="Permanently delete Link"
-                  description="The Link and Destination history will be deleted. Its Alias remains reserved until an Administrator releases it."
+                  description="The Link and its Destination Versions will be deleted. Its Alias remains reserved until an Administrator releases it."
                   submitLabel="Permanently delete"
                   session={session}
                   onSession={onSession}
@@ -1247,8 +1391,14 @@ function SensitiveAliasDialog({
 }
 
 function LinkRow({ link }: Readonly<{ link: LinkDto }>) {
+  const { session } = rootRoute.useRouteContext();
   const [copied, setCopied] = useState(false);
   const search = linksRoute.useSearch();
+  const queryClient = useQueryClient();
+  const matchRoute = useMatchRoute();
+  const selected = Boolean(
+    matchRoute({ to: "/links/$linkId", params: { linkId: link.id }, fuzzy: false }),
+  );
 
   async function copyShortUrl() {
     await navigator.clipboard.writeText(link.shortUrl);
@@ -1256,12 +1406,37 @@ function LinkRow({ link }: Readonly<{ link: LinkDto }>) {
     window.setTimeout(() => setCopied(false), 1_800);
   }
 
+  const stateChange = useMutation({
+    mutationFn: (command: "activate" | "disable" | "archive" | "restore") =>
+      apiRequest(`/api/internal/links/${encodeURIComponent(link.id)}/${command}`, {
+        method: "POST",
+        csrfToken: session.csrfToken,
+        body: { expectedRevision: link.revision },
+      }),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["links"] });
+    },
+  });
+
+  const rowCommands: readonly (readonly [
+    "activate" | "disable" | "archive" | "restore",
+    string,
+  ])[] =
+    link.state === "active"
+      ? [
+          ["disable", "Disable Link"],
+          ["archive", "Archive Link"],
+        ]
+      : link.state === "disabled"
+        ? [
+            ["activate", "Activate Link"],
+            ["archive", "Archive Link"],
+          ]
+        : [["restore", "Restore Link"]];
+
   return (
-    <article className="link-row">
-      <span className={`status-chip status-chip--${link.state}`}>
-        <StatusIcon state={link.state} />
-        {stateLabel(link.state)}
-      </span>
+    <article className={`link-row${selected ? " link-row--selected" : ""}`}>
+      <StatusChip state={link.state} />
       <div className="link-identity">
         <strong>
           <Link
@@ -1270,28 +1445,49 @@ function LinkRow({ link }: Readonly<{ link: LinkDto }>) {
             search={search}
             aria-label={`Open ${link.title}`}
           >
-            {link.title}
+            /{link.alias}
           </Link>
         </strong>
-        <span className="link-route">{link.shortUrl}</span>
-        <span className="link-destination">{link.destination.url}</span>
+        <span className="link-route">{link.title}</span>
+        <span
+          className="link-destination"
+          tabIndex={0}
+          data-full-value={link.destination.url}
+          title={link.destination.url}
+        >
+          {middleTruncate(link.destination.url)}
+        </span>
       </div>
-      <time dateTime={link.updatedAt}>
-        {new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
-          new Date(link.updatedAt),
-        )}
-      </time>
+      <time dateTime={link.updatedAt}>{formatDate(link.updatedAt)}</time>
       <Button
         variant="quiet"
-        size="icon"
         aria-label={`${copied ? "Copied" : "Copy"} short URL for ${link.title}`}
         onClick={() => void copyShortUrl()}
       >
         <Copy aria-hidden="true" size={16} strokeWidth={1.75} />
-        <span className="copy-label" aria-hidden="true">
-          {copied ? "Copied" : "Copy"}
-        </span>
+        {copied ? "Copied" : "Copy"}
       </Button>
+      <details className="row-menu">
+        <summary aria-label={`More actions for ${link.title}`}>
+          <MoreHorizontal aria-hidden="true" size={18} strokeWidth={1.75} />
+        </summary>
+        <div>
+          <Link to="/links/$linkId" params={{ linkId: link.id }} search={search}>
+            Open details
+          </Link>
+          {session.user.role !== "viewer" &&
+            rowCommands.map(([command, label]) => (
+              <button
+                type="button"
+                key={command}
+                disabled={stateChange.isPending}
+                onClick={() => stateChange.mutate(command)}
+              >
+                {label}
+              </button>
+            ))}
+        </div>
+      </details>
     </article>
   );
 }
@@ -1315,7 +1511,17 @@ function StatusIcon({ state }: Readonly<{ state: LinkState }>) {
 }
 
 function StatusChipForUser({ state }: Readonly<{ state: Session["user"]["state"] }>) {
-  return <span className={`status-chip status-chip--${state}`}>{state}</span>;
+  const Icon = {
+    invited: Mail,
+    active: CheckCircle2,
+    suspended: LockKeyhole,
+  }[state];
+  return (
+    <span className={`status-chip status-chip--${state}`}>
+      <Icon aria-hidden="true" size={14} strokeWidth={1.75} />
+      {{ invited: "Invited User", active: "Active User", suspended: "Suspended User" }[state]}
+    </span>
+  );
 }
 
 function LinkRowsSkeleton() {
@@ -1361,9 +1567,12 @@ function roleLabel(role: Session["user"]["role"]) {
   }[role];
 }
 
-function readTheme(): Theme {
-  const stored = window.localStorage.getItem("shortflare-theme");
-  return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value));
+}
+
+function middleTruncate(value: string) {
+  return value.length > 64 ? `${value.slice(0, 38)}…${value.slice(-22)}` : value;
 }
 
 function linkMutationError(error: Error) {

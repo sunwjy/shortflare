@@ -3,9 +3,16 @@ import { type FormEvent, useState } from "react";
 
 import { apiRequest, ApiError } from "./api";
 import { Button } from "./components/ui/button";
+import type { Theme } from "./theme";
 import type { Session, TokenRoute, User } from "./types";
 
-export function LoginScreen({ onLogin }: Readonly<{ onLogin: (session: Session) => void }>) {
+type ThemeProps = Readonly<{ theme: Theme; onTheme: (theme: Theme) => void }>;
+
+export function LoginScreen({
+  onLogin,
+  theme,
+  onTheme,
+}: Readonly<{ onLogin: (session: Session) => void }> & ThemeProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -56,12 +63,17 @@ export function LoginScreen({ onLogin }: Readonly<{ onLogin: (session: Session) 
             Sign in
           </Button>
         </form>
+        <ThemeField theme={theme} onTheme={onTheme} />
       </section>
     </main>
   );
 }
 
-export function TokenPasswordScreen({ route }: Readonly<{ route: TokenRoute }>) {
+export function TokenPasswordScreen({
+  route,
+  theme,
+  onTheme,
+}: Readonly<{ route: TokenRoute }> & ThemeProps) {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [result, setResult] = useState("");
@@ -132,7 +144,25 @@ export function TokenPasswordScreen({ route }: Readonly<{ route: TokenRoute }>) 
             Return to sign in
           </a>
         </form>
+        <ThemeField theme={theme} onTheme={onTheme} />
       </section>
     </main>
+  );
+}
+
+function ThemeField({ theme, onTheme }: ThemeProps) {
+  return (
+    <label className="theme-field">
+      Theme
+      <select
+        aria-label="Theme"
+        value={theme}
+        onChange={(event) => onTheme(event.target.value as Theme)}
+      >
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
   );
 }

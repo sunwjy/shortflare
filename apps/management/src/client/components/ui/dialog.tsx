@@ -25,12 +25,13 @@ export function Dialog({
           <DialogPrimitive.Popup className="dialog-popup">
             <DialogPrimitive.Title>{title}</DialogPrimitive.Title>
             <DialogPrimitive.Description>{description}</DialogPrimitive.Description>
-            {children}
             <DialogPrimitive.Close
+              autoFocus
               render={<Button type="button" variant="quiet" className="dialog-close" />}
             >
               Cancel
             </DialogPrimitive.Close>
+            {children}
           </DialogPrimitive.Popup>
         </DialogPrimitive.Viewport>
       </DialogPrimitive.Portal>
