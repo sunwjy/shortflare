@@ -29,6 +29,27 @@ describe("management worker", () => {
     expect(await response.json()).toEqual({ status: "ok" });
   });
 
+  it("returns the common API error without storage details for an unexpected failure", async () => {
+    const failingDatabase = new Proxy(env.DB, {
+      get() {
+        throw new Error("sensitive storage failure");
+      },
+    });
+    const response = await app.request(
+      "https://management.test/api/internal/links",
+      { headers: { cookie: "__Host-shortflare_session=broken" } },
+      { DB: failingDatabase, REDIRECT_DOMAIN: "short.test" },
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "internal-error",
+      details: {},
+    });
+  });
+
   it("sets up the initial Administrator and logs in with a secure Session cookie", async () => {
     await createIdentity({ db: env.DB }).writeInitialSetup({
       displayEmail: "Admin@Example.com",
@@ -121,7 +142,11 @@ describe("management worker", () => {
     );
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ ok: false, kind: "invalid-csrf-token" });
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "invalid-csrf-token",
+      details: {},
+    });
   });
 
   it("rejects unauthenticated Link creation", async () => {
@@ -143,10 +168,14 @@ describe("management worker", () => {
     );
 
     expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({ ok: false, kind: "unauthenticated" });
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "unauthenticated",
+      details: {},
+    });
   });
 
-  it("lets an Administrator invite a Viewer whose Link mutation is forbidden", async () => {
+  it("lets a Viewer read Links but forbids Link mutation", async () => {
     const administrator = await loginAdministrator();
     const issueResponse = await app.request(
       "https://management.test/api/internal/users/invitations",
@@ -181,6 +210,27 @@ describe("management worker", () => {
     );
     expect(acceptResponse.status).toBe(200);
     const viewer = await loginUser("viewer@example.com", "crimson satellites wander afar 286");
+    await app.request(
+      "https://management.test/api/internal/links",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(administrator),
+        body: JSON.stringify({
+          alias: "Readable",
+          title: "Readable",
+          destination: "https://example.com/readable",
+        }),
+      },
+      env,
+    );
+    const listResponse = await app.request(
+      "https://management.test/api/internal/links",
+      {
+        headers: { cookie: viewer.cookie },
+      },
+      env,
+    );
+    expect(listResponse.status).toBe(200);
 
     const response = await app.request(
       "https://management.test/api/internal/links",
@@ -197,7 +247,58 @@ describe("management worker", () => {
     );
 
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({ ok: false, kind: "forbidden" });
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "forbidden",
+      details: {},
+    });
+  });
+
+  it("lets a Member manage Links but not Reserved Aliases", async () => {
+    await loginAdministrator();
+    const administratorRecord = await env.DB.prepare(
+      "SELECT id FROM users WHERE role = 'administrator'",
+    ).first<{ id: string }>();
+    if (!administratorRecord) throw new Error("Expected Administrator");
+    const identity = createIdentity({ db: env.DB });
+    const invitation = await identity.issueInvitation({
+      actorId: administratorRecord.id,
+      email: "Member@Example.com",
+      role: "member",
+    });
+    if (!invitation.ok) throw new Error("Expected Member invitation");
+    await identity.acceptInvitation({
+      token: invitation.invitation.token,
+      password: "crimson satellites wander afar 286",
+    });
+    const member = await loginUser("member@example.com", "crimson satellites wander afar 286");
+
+    const createResponse = await app.request(
+      "https://management.test/api/internal/links",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(member),
+        body: JSON.stringify({
+          alias: "MemberLink",
+          title: "Member Link",
+          destination: "https://example.com/member",
+        }),
+      },
+      env,
+    );
+    expect(createResponse.status).toBe(201);
+
+    const reservedAliasesResponse = await app.request(
+      "https://management.test/api/internal/reserved-aliases",
+      { headers: { cookie: member.cookie } },
+      env,
+    );
+    expect(reservedAliasesResponse.status).toBe(403);
+    expect(await reservedAliasesResponse.json()).toEqual({
+      ok: false,
+      kind: "forbidden",
+      details: {},
+    });
   });
 
   it("reads the current Session without rotating CSRF and logs out that Session", async () => {
@@ -411,14 +512,449 @@ describe("management worker", () => {
     );
 
     expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({
+    expect(await response.json()).toEqual({
       ok: true,
-      kind: "link",
       link: {
+        id: expect.any(String),
         alias: "Docs",
+        shortUrl: "https://short.test/Docs",
         title: "Documentation",
         state: "active",
+        revision: 0,
+        destination: {
+          id: expect.any(String),
+          versionNumber: 1,
+          url: "https://example.com/guide",
+          createdAt: expect.any(String),
+        },
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
       },
+    });
+  });
+
+  it("generates an Alias only when the create request omits it", async () => {
+    const authentication = await loginAdministrator();
+    const response = await app.request(
+      "https://management.test/api/internal/links",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          title: "Generated",
+          destination: "https://example.com/generated",
+        }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as {
+      link: { alias: string; shortUrl: string };
+    };
+    expect(body.link.alias).toMatch(/^[0-9A-Za-z]{6}$/);
+    expect(body.link.shortUrl).toBe(`https://short.test/${body.link.alias}`);
+  });
+
+  it("lists and reads Links through the common transport DTO", async () => {
+    const authentication = await loginAdministrator();
+    const createResponse = await app.request(
+      "https://management.test/api/internal/links",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          alias: "Docs",
+          title: "Documentation",
+          destination: "https://example.com/guide",
+        }),
+      },
+      env,
+    );
+    const created = (await createResponse.json()) as { link: { id: string } };
+
+    const listResponse = await app.request(
+      "https://management.test/api/internal/links?search=docs&state=active&limit=10",
+      { headers: { cookie: authentication.cookie } },
+      env,
+    );
+    expect(listResponse.status).toBe(200);
+    expect(await listResponse.json()).toEqual({
+      ok: true,
+      items: [
+        expect.objectContaining({
+          id: created.link.id,
+          alias: "Docs",
+          shortUrl: "https://short.test/Docs",
+          revision: 0,
+          destination: expect.objectContaining({
+            versionNumber: 1,
+            url: "https://example.com/guide",
+          }),
+        }),
+      ],
+      nextCursor: null,
+    });
+
+    const detailResponse = await app.request(
+      `https://management.test/api/internal/links/${created.link.id}`,
+      { headers: { cookie: authentication.cookie } },
+      env,
+    );
+    expect(detailResponse.status).toBe(200);
+    expect(await detailResponse.json()).toEqual({
+      ok: true,
+      link: expect.objectContaining({
+        id: created.link.id,
+        alias: "Docs",
+        destination: expect.objectContaining({ versionNumber: 1 }),
+      }),
+    });
+  });
+
+  it("edits a Link atomically and rejects a stale revision", async () => {
+    const authentication = await loginAdministrator();
+    const createResponse = await app.request(
+      "https://management.test/api/internal/links",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          alias: "Docs",
+          title: "Documentation",
+          destination: "https://example.com/v1",
+        }),
+      },
+      env,
+    );
+    const created = (await createResponse.json()) as { link: { id: string } };
+
+    const editResponse = await app.request(
+      `https://management.test/api/internal/links/${created.link.id}`,
+      {
+        method: "PATCH",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          expectedRevision: 0,
+          title: "Updated documentation",
+          destination: "https://example.com/v2",
+        }),
+      },
+      env,
+    );
+    expect(editResponse.status).toBe(200);
+    expect(await editResponse.json()).toEqual({
+      ok: true,
+      changed: true,
+      link: expect.objectContaining({
+        revision: 1,
+        title: "Updated documentation",
+        destination: expect.objectContaining({
+          versionNumber: 2,
+          url: "https://example.com/v2",
+        }),
+      }),
+    });
+
+    const staleResponse = await app.request(
+      `https://management.test/api/internal/links/${created.link.id}`,
+      {
+        method: "PATCH",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          expectedRevision: 0,
+          title: "Updated documentation",
+        }),
+      },
+      env,
+    );
+    expect(staleResponse.status).toBe(409);
+    expect(await staleResponse.json()).toEqual({
+      ok: false,
+      kind: "link-conflict",
+      details: { revision: 1 },
+    });
+  });
+
+  it("executes explicit Link state commands with revision guards", async () => {
+    const authentication = await loginAdministrator();
+    const createResponse = await app.request(
+      "https://management.test/api/internal/links",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          alias: "Docs",
+          title: "Documentation",
+          destination: "https://example.com",
+        }),
+      },
+      env,
+    );
+    const created = (await createResponse.json()) as { link: { id: string } };
+    const commands = [
+      ["disable", 0, "disabled", 1],
+      ["archive", 1, "archived", 2],
+      ["restore", 2, "disabled", 3],
+      ["activate", 3, "active", 4],
+    ] as const;
+
+    for (const [command, expectedRevision, state, revision] of commands) {
+      // Each transition consumes the revision returned by the prior command.
+      // oxlint-disable-next-line no-await-in-loop
+      const response = await app.request(
+        `https://management.test/api/internal/links/${created.link.id}/${command}`,
+        {
+          method: "POST",
+          headers: authenticatedHeaders(authentication),
+          body: JSON.stringify({ expectedRevision }),
+        },
+        env,
+      );
+      expect(response.status).toBe(200);
+      // oxlint-disable-next-line no-await-in-loop
+      await expect(response.json()).resolves.toEqual({
+        ok: true,
+        changed: true,
+        link: expect.objectContaining({ state, revision }),
+      });
+    }
+  });
+
+  it("pages Destination Version history newest first for an Archived Link", async () => {
+    const authentication = await loginAdministrator();
+    const createResponse = await app.request(
+      "https://management.test/api/internal/links",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          alias: "Docs",
+          title: "Documentation",
+          destination: "https://example.com/v1",
+        }),
+      },
+      env,
+    );
+    const created = (await createResponse.json()) as { link: { id: string } };
+    for (const [expectedRevision, destination] of [
+      [0, "https://example.com/v2"],
+      [1, "https://example.com/v3"],
+    ] as const) {
+      // Sequential edits create deterministic Destination Version numbers.
+      // oxlint-disable-next-line no-await-in-loop
+      await app.request(
+        `https://management.test/api/internal/links/${created.link.id}`,
+        {
+          method: "PATCH",
+          headers: authenticatedHeaders(authentication),
+          body: JSON.stringify({ expectedRevision, destination }),
+        },
+        env,
+      );
+    }
+    await app.request(
+      `https://management.test/api/internal/links/${created.link.id}/archive`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({ expectedRevision: 2 }),
+      },
+      env,
+    );
+
+    const firstResponse = await app.request(
+      `https://management.test/api/internal/links/${created.link.id}/destination-versions?limit=2`,
+      { headers: { cookie: authentication.cookie } },
+      env,
+    );
+    expect(firstResponse.status).toBe(200);
+    const first = (await firstResponse.json()) as {
+      items: Array<{ versionNumber: number; current: boolean; url: string }>;
+      nextCursor: string | null;
+    };
+    expect(first).toEqual({
+      ok: true,
+      items: [
+        expect.objectContaining({
+          versionNumber: 3,
+          current: true,
+          url: "https://example.com/v3",
+        }),
+        expect.objectContaining({
+          versionNumber: 2,
+          current: false,
+          url: "https://example.com/v2",
+        }),
+      ],
+      nextCursor: expect.any(String),
+    });
+    if (first.nextCursor === null) throw new Error("expected a history cursor");
+
+    const secondResponse = await app.request(
+      `https://management.test/api/internal/links/${created.link.id}/destination-versions?limit=2&cursor=${encodeURIComponent(first.nextCursor)}`,
+      { headers: { cookie: authentication.cookie } },
+      env,
+    );
+    expect(await secondResponse.json()).toEqual({
+      ok: true,
+      items: [
+        expect.objectContaining({
+          versionNumber: 1,
+          current: false,
+          url: "https://example.com/v1",
+        }),
+      ],
+      nextCursor: null,
+    });
+  });
+
+  it("permanently deletes an Archived Link and manages its Reserved Alias", async () => {
+    const authentication = await loginAdministrator();
+    const createResponse = await app.request(
+      "https://management.test/api/internal/links",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          alias: "Docs",
+          title: "Documentation",
+          destination: "https://example.com",
+        }),
+      },
+      env,
+    );
+    const created = (await createResponse.json()) as { link: { id: string } };
+    await app.request(
+      `https://management.test/api/internal/links/${created.link.id}/archive`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({ expectedRevision: 0 }),
+      },
+      env,
+    );
+
+    const mismatchResponse = await app.request(
+      `https://management.test/api/internal/links/${created.link.id}/permanently-delete`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          expectedRevision: 1,
+          confirmationAlias: "docs",
+        }),
+      },
+      env,
+    );
+    expect(mismatchResponse.status).toBe(400);
+    expect(await mismatchResponse.json()).toEqual({
+      ok: false,
+      kind: "confirmation-mismatch",
+      details: {},
+    });
+
+    const deleteResponse = await app.request(
+      `https://management.test/api/internal/links/${created.link.id}/permanently-delete`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          expectedRevision: 1,
+          confirmationAlias: "Docs",
+        }),
+      },
+      env,
+    );
+    expect(deleteResponse.status).toBe(200);
+    expect(await deleteResponse.json()).toEqual({
+      ok: true,
+      reservedAlias: {
+        alias: "Docs",
+        shortUrl: "https://short.test/Docs",
+        deletedLinkId: created.link.id,
+        reservedAt: expect.any(String),
+      },
+    });
+
+    const listResponse = await app.request(
+      "https://management.test/api/internal/reserved-aliases?search=docs",
+      { headers: { cookie: authentication.cookie } },
+      env,
+    );
+    expect(await listResponse.json()).toEqual({
+      ok: true,
+      items: [
+        expect.objectContaining({
+          alias: "Docs",
+          shortUrl: "https://short.test/Docs",
+          deletedLinkId: created.link.id,
+        }),
+      ],
+      nextCursor: null,
+    });
+
+    const releaseResponse = await app.request(
+      "https://management.test/api/internal/reserved-aliases/Docs/release",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({ confirmationAlias: "Docs" }),
+      },
+      env,
+    );
+    expect(releaseResponse.status).toBe(204);
+    expect(await releaseResponse.text()).toBe("");
+  });
+
+  it("requires recent authentication before permanent Link deletion", async () => {
+    const authentication = await loginAdministrator();
+    const createResponse = await app.request(
+      "https://management.test/api/internal/links",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          alias: "Docs",
+          title: "Documentation",
+          destination: "https://example.com",
+        }),
+      },
+      env,
+    );
+    const created = (await createResponse.json()) as { link: { id: string } };
+    await app.request(
+      `https://management.test/api/internal/links/${created.link.id}/archive`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({ expectedRevision: 0 }),
+      },
+      env,
+    );
+    const staleAuthentication = Date.now() - 11 * 60 * 1_000;
+    await env.DB.prepare("UPDATE sessions SET created_at = ?, recent_authentication_at = ?")
+      .bind(staleAuthentication, staleAuthentication)
+      .run();
+
+    const response = await app.request(
+      `https://management.test/api/internal/links/${created.link.id}/permanently-delete`,
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({
+          expectedRevision: 1,
+          confirmationAlias: "Docs",
+        }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "reauthentication-required",
+      details: {},
     });
   });
 
@@ -446,7 +982,7 @@ describe("management worker", () => {
     expect(await response.json()).toMatchObject({
       ok: false,
       kind: "alias-in-use",
-      alias: "Taken",
+      details: { alias: "Taken" },
     });
   });
 
@@ -470,6 +1006,43 @@ describe("management worker", () => {
     expect(await response.json()).toEqual({
       ok: false,
       kind: "invalid-request",
+      details: {},
+    });
+  });
+
+  it("rejects unknown Link query parameters", async () => {
+    const authentication = await loginAdministrator();
+    const response = await app.request(
+      "https://management.test/api/internal/links?stats=archived",
+      { headers: { cookie: authentication.cookie } },
+      env,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "invalid-query",
+      details: {},
+    });
+  });
+
+  it("rejects an empty Link edit", async () => {
+    const authentication = await loginAdministrator();
+    const response = await app.request(
+      "https://management.test/api/internal/links/missing",
+      {
+        method: "PATCH",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({ expectedRevision: 0 }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "invalid-request",
+      details: {},
     });
   });
 });

@@ -242,7 +242,7 @@ export const links = sqliteTable(
     check("links_created_at_check", timestampCheck(table.createdAt)),
     check("links_updated_at_check", timestampCheck(table.updatedAt)),
     check("links_timestamp_order_check", sql`${table.updatedAt} >= ${table.createdAt}`),
-    index("links_list_order_idx").on(table.updatedAt, table.id),
+    index("links_list_order_idx").on(sql`${table.createdAt} DESC`, sql`${table.id} ASC`),
     index("links_search_title_idx").on(table.searchTitle),
   ],
 );
@@ -292,6 +292,7 @@ export const aliases = sqliteTable(
     ),
     uniqueIndex("aliases_link_id_unique").on(table.linkId),
     index("aliases_search_alias_idx").on(table.searchAlias),
+    index("aliases_reserved_order_idx").on(sql`${table.reservedAt} DESC`, sql`${table.alias} ASC`),
   ],
 );
 
@@ -325,6 +326,7 @@ export const destinationVersions = sqliteTable(
 
 export type AuditMetadata = Readonly<{
   alias?: string;
+  changedFields?: readonly ("title" | "destination")[];
   fromState?: "active" | "disabled" | "archived";
   toState?: "active" | "disabled" | "archived";
   destinationVersionId?: string;
@@ -342,8 +344,9 @@ export const auditEvents = sqliteTable(
     action: text("action", {
       enum: [
         "create",
-        "update-destination",
+        "edit",
         "update-title",
+        "update-destination",
         "activate",
         "disable",
         "archive",
@@ -375,8 +378,9 @@ export const auditEvents = sqliteTable(
       "audit_events_action_check",
       sql`${table.action} IN (
         'create',
-        'update-destination',
+        'edit',
         'update-title',
+        'update-destination',
         'activate',
         'disable',
         'archive',

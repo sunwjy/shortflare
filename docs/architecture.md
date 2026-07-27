@@ -86,8 +86,9 @@ Instance's redirect domain are rejected to prevent obvious loops.
 
 1. A same-origin Management endpoint validates its transport schema with Zod.
 2. Authentication and role checks happen before calling the Links module.
-3. The module enforces Alias, state-transition, last-write, and destination
-   invariants and returns a result instead of producing HTTP effects.
+3. The module enforces Alias, state-transition, optimistic-concurrency, and
+   destination invariants and returns a result instead of producing HTTP
+   effects.
 4. A D1 adapter persists the mutation and its audit event in one D1 batch where
    atomic batching is required.
 5. Data-center caches are allowed to expire naturally within five seconds.
@@ -95,6 +96,176 @@ Instance's redirect domain are rejected to prevent obvious loops.
 Changing a destination creates a Destination Version. It never overwrites the
 previous destination, so Link-wide and destination-specific analytics retain
 their meaning.
+
+The internal API exposes `activate`, `disable`, `archive`, and `restore` as
+explicit Link command endpoints rather than accepting a freely assigned state.
+This preserves distinct transition rules and Audit Events when two commands
+produce the same resulting state. The Link edit endpoint changes only the title
+and Destination atomically.
+
+The Links module exposes that edit as one `edit` command and removes the
+separate `update-title` and `update-destination` commands. Both in-memory and D1
+persistence adapters implement one atomic edit operation, so atomicity is a
+module guarantee rather than HTTP-adapter orchestration.
+
+The Links commands for permanent deletion and Reserved Alias release require
+and validate the exact `confirmationAlias`, so every future adapter receives the
+same target-confirmation guarantee. Administrator capability, recent
+reauthentication, CSRF, and Origin enforcement remain Management HTTP-adapter
+policies because they depend on Session and transport context.
+
+The Link collection returns Active and Disabled Links by default. Archived
+Links remain in the same collection but appear only when the caller explicitly
+includes the Archived state filter; invalid or empty state filters are rejected
+rather than ignored.
+
+Link collection pagination is ordered by immutable `createdAt DESC, id ASC`;
+Reserved Alias pagination uses `reservedAt DESC, alias ASC`. Cursors are
+opaque, versioned, and bound to the filters and search query that produced
+them. The default page size is 50, the accepted range is 1 through 100, and an
+invalid or mismatched cursor is rejected rather than restarting pagination.
+Mutable `updatedAt` ordering is not exposed in this slice because it can move
+items across an active cursor traversal.
+
+Management search trims one optional `search` value and performs a
+Unicode-normalized, case-folded substring match across Alias and title. The
+value is limited to 200 Unicode code points; repeated or oversized values are
+invalid, and no wildcard, regular-expression, or token query language is
+supported. This discovery behavior does not change the case-sensitive identity
+or redirect resolution of an Alias.
+
+Collection query strings are strict. Link collections accept only `search`,
+repeatable `state`, `limit`, and `cursor`; Reserved Alias collections accept
+only `search`, `limit`, and `cursor`. Unknown parameters, repeated single-value
+parameters, non-integer or out-of-range limits, and cursors bound to another
+query are rejected rather than ignored, rounded, or clamped.
+
+Both collections return `{ ok: true, items, nextCursor }`. An empty page is a
+successful empty array, and the final page uses `nextCursor: null`. The API does
+not compute `total` or duplicate cursor state as `hasMore`; clients treat a
+non-null cursor as the only continuation signal.
+
+Destination Version history is a child collection of one Link, ordered by the
+immutable per-Link `versionNumber DESC`. Its opaque cursor is bound to the Link
+and query version, uses the same default and maximum page sizes as the other
+collections, and cannot be reused for another Link. Missing Links return
+`link-not-found`, Archived Link history remains readable, and there is no
+separate Destination Version detail endpoint.
+
+The history query accepts only `limit` and `cursor`. URL search, date ranges,
+direct version filters, and all other parameters are rejected rather than
+ignored; they can be added later only for a demonstrated client need.
+
+The Link-management HTTP surface is:
+
+```text
+GET    /api/internal/links
+POST   /api/internal/links
+GET    /api/internal/links/:linkId
+GET    /api/internal/links/:linkId/destination-versions
+PATCH  /api/internal/links/:linkId
+POST   /api/internal/links/:linkId/activate
+POST   /api/internal/links/:linkId/disable
+POST   /api/internal/links/:linkId/archive
+POST   /api/internal/links/:linkId/restore
+POST   /api/internal/links/:linkId/permanently-delete
+GET    /api/internal/reserved-aliases
+POST   /api/internal/reserved-aliases/:alias/release
+```
+
+Collection, creation, detail, and atomic edit use resource-oriented methods.
+State transitions and destructive operations keep explicit command names;
+`DELETE /links/:id` is not used because it would obscure the distinction
+between archival and permanent deletion. Internal routes do not carry the
+version prefix reserved for the future public API.
+
+Link detail responses are transport DTOs containing the current Destination and
+Destination Version ID, not the domain `Link` object or its complete Destination
+Version history. The response also includes the Link revision required for
+mutations. The complete history is available through a separate paginated
+Destination Version collection in the MVP Link-management API.
+
+List, detail, create, edit, and state-transition responses share one Link DTO:
+
+```ts
+type LinkDto = {
+  id: string;
+  alias: string;
+  shortUrl: string;
+  title: string;
+  state: "active" | "disabled" | "archived";
+  revision: number;
+  destination: {
+    id: string;
+    versionNumber: number;
+    url: string;
+    createdAt: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+```
+
+The Management Worker derives `shortUrl` from the current HTTPS Redirect domain
+and Alias so clients do not reconstruct installation routing rules. All DTO
+timestamps are UTC ISO 8601 strings.
+
+Destination Version history items contain `id`, `versionNumber`, `url`,
+`createdAt`, and a derived `current` Boolean. The current Destination nested in
+the Link DTO includes the same `versionNumber`. History items do not duplicate
+Actor, Audit Event, or change-reason data, and title-only edits do not create
+Destination Versions.
+
+The history collection is read-only. Reusing a past URL goes through the normal
+atomic Link edit and appends a new Destination Version with a new ID, timestamp,
+and version number; no endpoint reactivates or mutates an existing Version.
+
+Link creation accepts an optional Alias. Omitting the field requests a generated
+six-character Base62 Alias; `null` and an empty string are invalid rather than
+alternate spellings of omission. The response returns the selected Alias, which
+cannot be changed after creation.
+
+Successful create, edit, and state-transition responses return the latest Link
+detail DTO so clients receive the authoritative revision without a follow-up
+read. Edits and transitions also return whether the command changed anything;
+a no-op does not increment the revision or create an Audit Event. Permanent
+deletion instead returns the new Reserved Alias, and a successful Reserved Alias
+release has no response body.
+
+Atomic Link edits are strict partial updates containing `expectedRevision` and
+at least one of `title` or `destination`. Omission preserves a field; `null`, an
+empty edit, an Alias change, or any unknown field is invalid. Both supplied
+values are validated before persistence, so one invalid value prevents the
+entire edit.
+
+A successful atomic edit creates one Audit Event whose metadata lists only the
+fields that actually changed and, when applicable, the new Destination Version
+ID. It does not copy old or new titles or Destination URLs. No-op, rejected,
+and failed edits create no Audit Event.
+
+All Link API failures use a discriminated `{ ok: false, kind, details }`
+envelope. Invalid transport input, domain values, and Alias confirmations return
+`400`; an invalid Session or inactive User returns `401`; authorization, request
+integrity, and recent-authentication failures return `403`; missing resources
+return `404`; and Alias, revision, or state conflicts return `409`. Stable
+`kind` values drive client behavior, while localized human messages belong to
+the UI and internal validation or storage details are never exposed.
+
+Every JSON success response uses `ok: true`, and every JSON error response uses
+`ok: false`; HTTP status and body discriminants may not disagree. Successful
+responses do not add a redundant `kind`. The bodyless `204` Reserved Alias
+release is the only exception.
+
+The MVP internal Link API does not persist idempotency keys. Clients must not
+automatically retry mutations; after an ambiguous transport failure they
+refetch the relevant collection or detail before offering another command.
+Durable request deduplication is deferred to the separately designed public API
+or another external automation boundary.
+
+For revision-guarded commands, the revision comparison happens before no-op
+detection. A stale command returns `409 link-conflict` even if its requested
+result happens to equal the current Link; the error reveals the current revision
+but requires a detail refetch for current data.
 
 ### Analytics ingestion and query
 
@@ -228,6 +399,21 @@ destinations, raw events, and rollups but replaces the Link with a Reserved
 Alias that returns `410 Gone` and keeps a minimal, non-sensitive audit record.
 Alias release is allowed only after permanent deletion and is a separate
 Administrator-only action with reauthentication and a strong warning.
+Permanent deletion and Alias release requests must also repeat the target Alias
+exactly, including case. A mismatched confirmation leaves all state unchanged;
+a Boolean confirmation flag is insufficient.
+
+The internal Management API exposes Reserved Aliases as their own
+Administrator-only collection rather than representing them as a Link state.
+The collection supports search and cursor pagination so a Reserved Alias
+remains discoverable after the permanent-deletion response is gone. Link list
+and detail results never contain synthetic Reserved Alias entries.
+
+Reserved Alias collection items and permanent-deletion responses share a DTO
+containing `alias`, the server-derived `shortUrl`, `deletedLinkId`, and a UTC
+ISO 8601 `reservedAt`. Reserved Alias search applies the same management
+case-folding behavior to Alias only. There is no separate Reserved Alias detail
+endpoint.
 
 ## Authentication and authorization
 
@@ -319,6 +505,9 @@ Administrator-only action with reauthentication and a strong warning.
   token. A stale Session receives `403 reauthentication-required` without
   performing the command; changing one's own password always verifies the
   current password regardless of this window.
+- Permanent Link deletion and Reserved Alias release additionally require an
+  exact, case-sensitive Alias confirmation in the command. A mismatch returns
+  `400 confirmation-mismatch` without performing the command.
 - Audit Events record successful initial Administrator activation, Invitation
   issue, reissue, cancellation and acceptance, Password Reset issue and use,
   password change, role change, suspension, and reactivation. Login, logout,

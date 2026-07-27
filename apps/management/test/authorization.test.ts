@@ -5,8 +5,11 @@ import type { User, UserRole } from "../src/worker/identity";
 
 describe("authorization", () => {
   it.each([
-    ["administrator", ["create-link", "manage-users", "view-users"]],
-    ["member", ["create-link"]],
+    [
+      "administrator",
+      ["manage-links", "delete-links", "manage-reserved-aliases", "manage-users", "view-users"],
+    ],
+    ["member", ["manage-links"]],
     ["viewer", []],
   ] satisfies ReadonlyArray<readonly [UserRole, readonly Capability[]]>)(
     "maps %s to its capabilities",
@@ -20,7 +23,9 @@ describe("authorization", () => {
       };
 
       for (const capability of [
-        "create-link",
+        "manage-links",
+        "delete-links",
+        "manage-reserved-aliases",
         "manage-users",
         "view-users",
       ] satisfies Capability[]) {

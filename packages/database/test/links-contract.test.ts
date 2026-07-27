@@ -16,6 +16,6 @@ linksContract((overrides = {}) => {
     redirectDomain: "go.example.com",
     generateId: () => `id-${++id}`,
     generateAlias: overrides.generateAlias ?? (() => "Random"),
-    now: () => new Date("2026-07-23T00:00:00.000Z"),
+    now: overrides.now ?? (() => new Date("2026-07-23T00:00:00.000Z")),
   });
 });

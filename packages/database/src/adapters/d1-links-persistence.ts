@@ -7,7 +7,13 @@ import type {
   LinksPersistence,
   PersistedLinkMutation,
 } from "@shortflare/links";
-import { encodeListCursor, foldCase, parseAlias } from "@shortflare/links";
+import {
+  encodeDestinationVersionCursor,
+  encodeListCursor,
+  encodeReservedAliasCursor,
+  foldCase,
+  parseAlias,
+} from "@shortflare/links";
 
 // Optimistic-concurrency retries must observe the result of the prior attempt.
 // oxlint-disable no-await-in-loop
@@ -148,12 +154,15 @@ export function createD1LinksPersistence(
       };
     },
 
-    async transitionState(linkId, target, allowedCurrentStates, context) {
+    async transitionState(linkId, expectedRevision, target, allowedCurrentStates, context) {
       return retryStoredLinkMutation<PersistedLinkMutation>(
         database,
         linkId,
         "transition Link state",
         async (stored) => {
+          if (stored.revision !== expectedRevision) {
+            return { kind: "conflict", currentRevision: stored.revision };
+          }
           if (!allowedCurrentStates.includes(stored.link.state)) {
             return { kind: "invalid-state", state: stored.link.state };
           }
@@ -207,46 +216,89 @@ export function createD1LinksPersistence(
       );
     },
 
-    async updateTitle(linkId, title, context) {
+    async edit(linkId, expectedRevision, values, context) {
       return retryStoredLinkMutation<PersistedLinkMutation>(
         database,
         linkId,
-        "update Link title",
+        "edit Link",
         async (stored) => {
+          if (stored.revision !== expectedRevision) {
+            return { kind: "conflict", currentRevision: stored.revision };
+          }
           if (stored.link.state === "archived") {
             return { kind: "invalid-state", state: stored.link.state };
           }
-          if (stored.link.title === title) return unchanged(stored.link);
 
-          const results = await database.batch([
+          const currentDestination = stored.link.destinationVersions.at(-1);
+          const title = values.title ?? stored.link.title;
+          const titleChanged = title !== stored.link.title;
+          const destinationChanged =
+            values.destinationVersion !== undefined &&
+            values.destinationVersion.destination !== currentDestination?.destination;
+          if (!titleChanged && !destinationChanged) return unchanged(stored.link);
+
+          const changedFields = [
+            ...(titleChanged ? ["title"] : []),
+            ...(destinationChanged ? ["destination"] : []),
+          ];
+          const metadata = {
+            changedFields,
+            ...(destinationChanged ? { destinationVersionId: values.destinationVersion!.id } : {}),
+          };
+          const statements: D1PreparedStatement[] = [
             database
               .prepare(
                 `INSERT INTO audit_events
-                 (id, actor_id, action, subject_id, occurred_at, metadata)
-               SELECT ?, ?, ?, id, ?, '{}'
-               FROM links
-               WHERE id = ? AND revision = ? AND state != 'archived'`,
+                   (id, actor_id, action, subject_id, occurred_at, metadata)
+                 SELECT ?, ?, ?, id, ?, ?
+                 FROM links
+                 WHERE id = ? AND revision = ? AND state != 'archived'`,
               )
               .bind(
                 generateAuditId(),
                 context.actor.id,
                 context.action,
                 context.occurredAt.getTime(),
+                JSON.stringify(metadata),
                 linkId,
                 stored.revision,
               ),
+          ];
+          if (destinationChanged) {
+            statements.push(
+              database
+                .prepare(
+                  `INSERT INTO destination_versions
+                     (id, link_id, version_number, destination, created_at)
+                   SELECT ?, id, ?, ?, ?
+                   FROM links
+                   WHERE id = ? AND revision = ? AND state != 'archived'`,
+                )
+                .bind(
+                  values.destinationVersion!.id,
+                  stored.currentVersionNumber + 1,
+                  values.destinationVersion!.destination,
+                  values.destinationVersion!.createdAt.getTime(),
+                  linkId,
+                  stored.revision,
+                ),
+            );
+          }
+          const updateIndex = statements.length;
+          statements.push(
             database
               .prepare(
                 `UPDATE links
-               SET title = ?, search_title = ?, updated_at = ?,
-                   revision = revision + 1
-               WHERE id = ? AND revision = ? AND state != 'archived'`,
+                 SET title = ?, search_title = ?, updated_at = ?,
+                     revision = revision + 1
+                 WHERE id = ? AND revision = ? AND state != 'archived'`,
               )
               .bind(title, foldCase(title), context.occurredAt.getTime(), linkId, stored.revision),
             ...readLinkStatements(database, linkId),
-          ]);
-          if (changes(results[1]) === 1) {
-            return updated(hydrateBatchLink(results, 2, 3));
+          );
+          const results = await database.batch(statements);
+          if (changes(results[updateIndex]) === 1) {
+            return updated(hydrateBatchLink(results, updateIndex + 1, updateIndex + 2));
           }
           return retryMutation;
         },
@@ -254,81 +306,18 @@ export function createD1LinksPersistence(
       );
     },
 
-    async appendDestinationVersion(linkId, destinationVersion, context) {
-      return retryStoredLinkMutation<PersistedLinkMutation>(
-        database,
-        linkId,
-        "append Destination Version",
-        async (stored) => {
-          if (stored.link.state === "archived") {
-            return { kind: "invalid-state", state: stored.link.state };
-          }
-          if (
-            stored.link.destinationVersions.at(-1)?.destination === destinationVersion.destination
-          ) {
-            return unchanged(stored.link);
-          }
-
-          const results = await database.batch([
-            database
-              .prepare(
-                `INSERT INTO audit_events
-                 (id, actor_id, action, subject_id, occurred_at, metadata)
-               SELECT ?, ?, ?, id, ?, ?
-               FROM links
-               WHERE id = ? AND revision = ? AND state != 'archived'`,
-              )
-              .bind(
-                generateAuditId(),
-                context.actor.id,
-                context.action,
-                context.occurredAt.getTime(),
-                JSON.stringify({
-                  destinationVersionId: destinationVersion.id,
-                }),
-                linkId,
-                stored.revision,
-              ),
-            database
-              .prepare(
-                `INSERT INTO destination_versions
-                 (id, link_id, version_number, destination, created_at)
-               SELECT ?, id, ?, ?, ?
-               FROM links
-               WHERE id = ? AND revision = ? AND state != 'archived'`,
-              )
-              .bind(
-                destinationVersion.id,
-                stored.currentVersionNumber + 1,
-                destinationVersion.destination,
-                destinationVersion.createdAt.getTime(),
-                linkId,
-                stored.revision,
-              ),
-            database
-              .prepare(
-                `UPDATE links
-               SET updated_at = ?, revision = revision + 1
-               WHERE id = ? AND revision = ? AND state != 'archived'`,
-              )
-              .bind(context.occurredAt.getTime(), linkId, stored.revision),
-            ...readLinkStatements(database, linkId),
-          ]);
-          if (changes(results[2]) === 1) {
-            return updated(hydrateBatchLink(results, 3, 4));
-          }
-          return retryMutation;
-        },
-        () => ({ kind: "not-found" }),
-      );
-    },
-
-    async permanentlyDelete(linkId, context) {
+    async permanentlyDelete(linkId, expectedRevision, confirmationAlias, context) {
       return retryStoredLinkMutation<PermanentlyDeleteResult>(
         database,
         linkId,
         "permanently delete Link",
         async (stored) => {
+          if (stored.revision !== expectedRevision) {
+            return { kind: "conflict", currentRevision: stored.revision };
+          }
+          if (stored.link.alias !== confirmationAlias) {
+            return { kind: "confirmation-mismatch" };
+          }
           if (stored.link.state !== "archived") {
             return { kind: "invalid-state", state: stored.link.state };
           }
@@ -370,7 +359,14 @@ export function createD1LinksPersistence(
               .bind(linkId, stored.revision),
           ]);
           if (changes(results[2]) > 0) {
-            return { kind: "deleted", alias: stored.link.alias };
+            return {
+              kind: "deleted",
+              reservedAlias: {
+                alias: stored.link.alias,
+                deletedLinkId: stored.link.id,
+                reservedAt: context.occurredAt,
+              },
+            };
           }
           return retryMutation;
         },
@@ -411,8 +407,8 @@ export function createD1LinksPersistence(
         query.cursor === undefined
           ? ""
           : `AND (
-               l.updated_at < ?
-               OR (l.updated_at = ? AND l.id > ?)
+               l.created_at < ?
+               OR (l.created_at = ? AND l.id > ?)
              )`;
       const result = await database
         .prepare(
@@ -444,7 +440,7 @@ export function createD1LinksPersistence(
                OR instr(l.search_title, ?) > 0
              )
              ${cursorSql}
-           ORDER BY l.updated_at DESC, l.id ASC
+           ORDER BY l.created_at DESC, l.id ASC
            LIMIT ?`,
         )
         .bind(
@@ -455,8 +451,8 @@ export function createD1LinksPersistence(
           ...(query.cursor === undefined
             ? []
             : [
-                query.cursor.updatedAt.getTime(),
-                query.cursor.updatedAt.getTime(),
+                query.cursor.createdAt.getTime(),
+                query.cursor.createdAt.getTime(),
                 query.cursor.id,
               ]),
           query.limit + 1,
@@ -470,9 +466,99 @@ export function createD1LinksPersistence(
         items,
         nextCursor:
           result.results.length > query.limit && lastItem !== undefined
-            ? encodeListCursor({
-                updatedAt: lastItem.updatedAt,
+            ? encodeListCursor(query.search, query.states, {
+                createdAt: lastItem.createdAt,
                 id: lastItem.id,
+              })
+            : null,
+      };
+    },
+
+    async listDestinationVersions(linkId, query) {
+      const exists = await database
+        .prepare(
+          `SELECT MAX(dv.version_number) AS currentVersionNumber
+           FROM links l
+           JOIN destination_versions dv ON dv.link_id = l.id
+           WHERE l.id = ?
+           GROUP BY l.id`,
+        )
+        .bind(linkId)
+        .first<{ currentVersionNumber: number }>();
+      if (exists === null) return null;
+
+      const result = await database
+        .prepare(
+          `SELECT
+             id,
+             destination,
+             version_number AS versionNumber,
+             created_at AS createdAt
+           FROM destination_versions
+           WHERE link_id = ?
+             AND (? IS NULL OR version_number < ?)
+           ORDER BY version_number DESC
+           LIMIT ?`,
+        )
+        .bind(
+          linkId,
+          query.cursor?.versionNumber ?? null,
+          query.cursor?.versionNumber ?? null,
+          query.limit + 1,
+        )
+        .all<DestinationVersionRow>();
+      const items = result.results.slice(0, query.limit).map(hydrateDestinationVersion);
+      const lastItem = items.at(-1);
+      return {
+        items,
+        currentVersionNumber: exists.currentVersionNumber,
+        nextCursor:
+          result.results.length > query.limit && lastItem !== undefined
+            ? encodeDestinationVersionCursor(linkId, lastItem.versionNumber)
+            : null,
+      };
+    },
+
+    async listReservedAliases(query) {
+      const result = await database
+        .prepare(
+          `SELECT
+             alias,
+             deleted_link_id AS deletedLinkId,
+             reserved_at AS reservedAt
+           FROM aliases
+           WHERE link_id IS NULL
+             AND instr(search_alias, ?) > 0
+             AND (
+               ? IS NULL
+               OR reserved_at < ?
+               OR (reserved_at = ? AND alias > ? COLLATE BINARY)
+             )
+           ORDER BY reserved_at DESC, alias COLLATE BINARY ASC
+           LIMIT ?`,
+        )
+        .bind(
+          query.search,
+          query.cursor?.reservedAt.getTime() ?? null,
+          query.cursor?.reservedAt.getTime() ?? null,
+          query.cursor?.reservedAt.getTime() ?? null,
+          query.cursor?.alias ?? null,
+          query.limit + 1,
+        )
+        .all<{ alias: string; deletedLinkId: string; reservedAt: number }>();
+      const items = result.results.slice(0, query.limit).map((row) => ({
+        alias: assertAlias(row.alias),
+        deletedLinkId: row.deletedLinkId,
+        reservedAt: new Date(row.reservedAt),
+      }));
+      const lastItem = items.at(-1);
+      return {
+        items,
+        nextCursor:
+          result.results.length > query.limit && lastItem !== undefined
+            ? encodeReservedAliasCursor(query.search, {
+                reservedAt: lastItem.reservedAt,
+                alias: lastItem.alias,
               })
             : null,
       };
@@ -526,7 +612,8 @@ async function readStoredLink(
          JOIN links l ON l.id = dv.link_id
          JOIN aliases a ON a.link_id = l.id
          WHERE ${condition}
-         ORDER BY dv.version_number ASC`,
+         ORDER BY dv.version_number DESC
+         LIMIT 1`,
       )
       .bind(value),
   ]);
@@ -541,7 +628,7 @@ async function readStoredLink(
     link: hydrateLink(linkRow, versionRows),
     revision: linkRow.revision,
     currentVersionNumber:
-      versionRows.at(-1)?.versionNumber ?? fail(`Link ${linkRow.id} has no Destination Version`),
+      versionRows[0]?.versionNumber ?? fail(`Link ${linkRow.id} has no Destination Version`),
   };
 }
 
@@ -571,7 +658,8 @@ function readLinkStatements(database: D1Database, linkId: string) {
            created_at AS createdAt
          FROM destination_versions
          WHERE link_id = ?
-         ORDER BY version_number ASC`,
+         ORDER BY version_number DESC
+         LIMIT 1`,
       )
       .bind(linkId),
   ] as const;
@@ -595,6 +683,7 @@ function hydrateLink(row: LinkRow, versionRows: readonly DestinationVersionRow[]
     alias: assertAlias(row.alias),
     title: row.title,
     state: row.state,
+    revision: row.revision,
     destinationVersions: versionRows.map(hydrateDestinationVersion),
     createdAt: new Date(row.createdAt),
     updatedAt: new Date(row.updatedAt),
@@ -604,6 +693,7 @@ function hydrateLink(row: LinkRow, versionRows: readonly DestinationVersionRow[]
 function hydrateDestinationVersion(row: DestinationVersionRow): DestinationVersion {
   return {
     id: row.id,
+    versionNumber: row.versionNumber,
     destination: row.destination,
     createdAt: new Date(row.createdAt),
   };
@@ -615,8 +705,10 @@ function hydrateSummary(row: LinkSummarySqlRow) {
     alias: assertAlias(row.alias),
     title: row.title,
     state: row.state,
+    revision: row.revision,
     currentDestinationVersion: {
       id: row.destinationVersionId,
+      versionNumber: row.versionNumber,
       destination: row.destination,
       createdAt: new Date(row.destinationCreatedAt),
     },

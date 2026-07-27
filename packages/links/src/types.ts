@@ -8,6 +8,7 @@ export type LinkState = "active" | "disabled" | "archived";
 
 export type DestinationVersion = Readonly<{
   id: string;
+  versionNumber: number;
   destination: string;
   createdAt: Date;
 }>;
@@ -17,6 +18,7 @@ export type Link = Readonly<{
   alias: Alias;
   title: string;
   state: LinkState;
+  revision: number;
   destinationVersions: readonly DestinationVersion[];
   createdAt: Date;
   updatedAt: Date;
@@ -27,6 +29,7 @@ export type LinkSummary = Readonly<{
   alias: Alias;
   title: string;
   state: LinkState;
+  revision: number;
   currentDestinationVersion: DestinationVersion;
   createdAt: Date;
   updatedAt: Date;
@@ -39,40 +42,42 @@ export type CreateLinkCommand = Readonly<{
   destination: string;
 }>;
 
-export type UpdateDestinationCommand = Readonly<{
-  kind: "update-destination";
-  linkId: string;
-  destination: string;
-}>;
-
-export type UpdateTitleCommand = Readonly<{
-  kind: "update-title";
-  linkId: string;
-  title: string;
-}>;
+export type EditLinkCommand = Readonly<
+  {
+    kind: "edit";
+    linkId: string;
+    expectedRevision: number;
+  } & (
+    | Readonly<{ title: string; destination?: string }>
+    | Readonly<{ title?: string; destination: string }>
+  )
+>;
 
 export type StateCommandKind = "activate" | "disable" | "archive" | "restore";
 export type StateCommand = {
   [Kind in StateCommandKind]: Readonly<{
     kind: Kind;
     linkId: string;
+    expectedRevision: number;
   }>;
 }[StateCommandKind];
 
 export type PermanentlyDeleteCommand = Readonly<{
   kind: "permanently-delete";
   linkId: string;
+  expectedRevision: number;
+  confirmationAlias: string;
 }>;
 
 export type ReleaseAliasCommand = Readonly<{
   kind: "release-alias";
   alias: string;
+  confirmationAlias: string;
 }>;
 
 export type LinkCommand =
   | CreateLinkCommand
-  | UpdateDestinationCommand
-  | UpdateTitleCommand
+  | EditLinkCommand
   | StateCommand
   | PermanentlyDeleteCommand
   | ReleaseAliasCommand;
@@ -92,8 +97,13 @@ export type LinkResult =
     }>
   | Readonly<{
       ok: true;
-      kind: "deleted" | "released";
+      kind: "released";
       alias: Alias;
+    }>
+  | Readonly<{
+      ok: true;
+      kind: "deleted";
+      reservedAlias: ReservedAlias;
     }>
   | Readonly<{
       ok: false;
@@ -133,6 +143,15 @@ export type LinkResult =
   | Readonly<{
       ok: false;
       kind: "alias-generation-exhausted";
+    }>
+  | Readonly<{
+      ok: false;
+      kind: "link-conflict";
+      currentRevision: number;
+    }>
+  | Readonly<{
+      ok: false;
+      kind: "confirmation-mismatch";
     }>;
 
 export type RedirectDecision =
@@ -148,6 +167,18 @@ export type RedirectDecision =
 export type LinkQuery =
   | Readonly<{ kind: "detail"; linkId: string }>
   | Readonly<{
+      kind: "destination-versions";
+      linkId: string;
+      limit?: number;
+      cursor?: string;
+    }>
+  | Readonly<{
+      kind: "reserved-aliases";
+      search?: string;
+      limit?: number;
+      cursor?: string;
+    }>
+  | Readonly<{
       kind: "list";
       search?: string;
       states?: readonly LinkState[];
@@ -160,9 +191,30 @@ export type LinkPage = Readonly<{
   nextCursor: string | null;
 }>;
 
+export type DestinationVersionPage = Readonly<{
+  items: readonly DestinationVersion[];
+  nextCursor: string | null;
+  currentVersionNumber: number;
+}>;
+
+export type ReservedAliasPage = Readonly<{
+  items: readonly ReservedAlias[];
+  nextCursor: string | null;
+}>;
+
 export type LinkQueryResult =
   | Readonly<{ ok: true; kind: "detail"; link: Link }>
   | Readonly<{ ok: true; kind: "page"; page: LinkPage }>
+  | Readonly<{
+      ok: true;
+      kind: "destination-version-page";
+      page: DestinationVersionPage;
+    }>
+  | Readonly<{
+      ok: true;
+      kind: "reserved-alias-page";
+      page: ReservedAliasPage;
+    }>
   | Readonly<{ ok: false; kind: "invalid-cursor" }>
   | Readonly<{
       ok: false;
@@ -175,9 +227,20 @@ export type PersistenceListQuery = Readonly<{
   states: readonly LinkState[];
   limit: number;
   cursor?: Readonly<{
-    updatedAt: Date;
+    createdAt: Date;
     id: string;
   }>;
+}>;
+
+export type PersistenceDestinationVersionQuery = Readonly<{
+  limit: number;
+  cursor?: Readonly<{ versionNumber: number }>;
+}>;
+
+export type PersistenceReservedAliasQuery = Readonly<{
+  search: string;
+  limit: number;
+  cursor?: Readonly<{ reservedAt: Date; alias: Alias }>;
 }>;
 
 export type LinkMutationContext = Readonly<{
@@ -189,7 +252,8 @@ export type LinkMutationContext = Readonly<{
 export type PersistedLinkMutation =
   | Readonly<{ kind: "updated"; changed: boolean; link: Link }>
   | Readonly<{ kind: "not-found" }>
-  | Readonly<{ kind: "invalid-state"; state: LinkState }>;
+  | Readonly<{ kind: "invalid-state"; state: LinkState }>
+  | Readonly<{ kind: "conflict"; currentRevision: number }>;
 
 export type LinksPersistence = {
   create(
@@ -201,33 +265,42 @@ export type LinksPersistence = {
   findReservedAlias(alias: Alias): Promise<ReservedAlias | null>;
   transitionState(
     linkId: string,
+    expectedRevision: number,
     target: LinkState,
     allowedCurrentStates: readonly LinkState[],
     context: LinkMutationContext,
   ): Promise<PersistedLinkMutation>;
-  updateTitle(
+  edit(
     linkId: string,
-    title: string,
-    context: LinkMutationContext,
-  ): Promise<PersistedLinkMutation>;
-  appendDestinationVersion(
-    linkId: string,
-    destinationVersion: DestinationVersion,
+    expectedRevision: number,
+    values: Readonly<{
+      title?: string;
+      destinationVersion?: Omit<DestinationVersion, "versionNumber">;
+    }>,
     context: LinkMutationContext,
   ): Promise<PersistedLinkMutation>;
   permanentlyDelete(
     linkId: string,
+    expectedRevision: number,
+    confirmationAlias: string,
     context: LinkMutationContext,
   ): Promise<
-    | Readonly<{ kind: "deleted"; alias: Alias }>
+    | Readonly<{ kind: "deleted"; reservedAlias: ReservedAlias }>
     | Readonly<{ kind: "not-found" }>
     | Readonly<{ kind: "invalid-state"; state: LinkState }>
+    | Readonly<{ kind: "conflict"; currentRevision: number }>
+    | Readonly<{ kind: "confirmation-mismatch" }>
   >;
   releaseReservedAlias(
     alias: Alias,
     context: LinkMutationContext,
   ): Promise<"released" | "not-found">;
   list(query: PersistenceListQuery): Promise<LinkPage>;
+  listDestinationVersions(
+    linkId: string,
+    query: PersistenceDestinationVersionQuery,
+  ): Promise<DestinationVersionPage | null>;
+  listReservedAliases(query: PersistenceReservedAliasQuery): Promise<ReservedAliasPage>;
 };
 
 export type Links = {

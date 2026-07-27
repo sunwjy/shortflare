@@ -11,6 +11,24 @@ const occurredAt = new Date("2026-07-23T00:00:00.000Z");
 beforeEach(resetDatabase);
 
 describe("D1 Link mutation persistence", () => {
+  it("keeps legacy Link edit actions valid for retained Audit Events", async () => {
+    await env.DB.prepare(
+      `INSERT INTO audit_events
+         (id, actor_id, action, subject_id, occurred_at, metadata)
+       VALUES
+         ('legacy-title', 'user-1', 'update-title', 'link-1', 1, '{}'),
+         ('legacy-destination', 'user-1', 'update-destination', 'link-1', 2, '{}')`,
+    ).run();
+
+    const result = await env.DB.prepare(
+      "SELECT action, metadata FROM audit_events ORDER BY occurred_at",
+    ).all<{ action: string; metadata: string }>();
+    expect(result.results).toEqual([
+      { action: "update-title", metadata: "{}" },
+      { action: "update-destination", metadata: "{}" },
+    ]);
+  });
+
   it("audits only successful changes with non-sensitive metadata", async () => {
     const links = createTestLinks();
     const created = await links.execute(
@@ -28,24 +46,42 @@ describe("D1 Link mutation persistence", () => {
 
     await links.execute(
       {
-        kind: "update-title",
+        kind: "edit",
         linkId: created.link.id,
+        expectedRevision: 0,
         title: "Private title",
       },
       actor,
     );
-    await links.execute({ kind: "permanently-delete", linkId: created.link.id }, actor);
     await links.execute(
       {
-        kind: "update-destination",
+        kind: "permanently-delete",
         linkId: created.link.id,
+        expectedRevision: 0,
+        confirmationAlias: "Docs",
+      },
+      actor,
+    );
+    await links.execute(
+      {
+        kind: "edit",
+        linkId: created.link.id,
+        expectedRevision: 0,
         destination: "https://another-secret.example/path",
       },
       actor,
     );
-    await links.execute({ kind: "archive", linkId: created.link.id }, actor);
-    await links.execute({ kind: "permanently-delete", linkId: created.link.id }, actor);
-    await links.execute({ kind: "release-alias", alias: "Docs" }, actor);
+    await links.execute({ kind: "archive", linkId: created.link.id, expectedRevision: 1 }, actor);
+    await links.execute(
+      {
+        kind: "permanently-delete",
+        linkId: created.link.id,
+        expectedRevision: 2,
+        confirmationAlias: "Docs",
+      },
+      actor,
+    );
+    await links.execute({ kind: "release-alias", alias: "Docs", confirmationAlias: "Docs" }, actor);
 
     const result = await env.DB.prepare(
       `SELECT
@@ -78,11 +114,14 @@ describe("D1 Link mutation persistence", () => {
         metadata: { alias: "Docs" },
       },
       {
-        action: "update-destination",
+        action: "edit",
         actorId: "user-1",
         subjectId: "id-1",
         occurredAt: occurredAt.getTime(),
-        metadata: { destinationVersionId: "id-3" },
+        metadata: {
+          changedFields: ["destination"],
+          destinationVersionId: "id-3",
+        },
       },
       {
         action: "archive",
@@ -171,7 +210,7 @@ describe("D1 Link mutation persistence", () => {
        VALUES (
          'duplicate-update-audit',
          'user-1',
-         'update-title',
+         'edit',
          'existing',
          0,
          '{}'
@@ -181,8 +220,9 @@ describe("D1 Link mutation persistence", () => {
     await expect(
       links.execute(
         {
-          kind: "update-title",
+          kind: "edit",
           linkId: created.link.id,
+          expectedRevision: 0,
           title: "Changed title",
         },
         actor,

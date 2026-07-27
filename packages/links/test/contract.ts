@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { CreateLinksOptions, Links } from "../src/index";
 
-type LinksContractFactory = (overrides?: Pick<CreateLinksOptions, "generateAlias">) => Links;
+type LinksContractFactory = (
+  overrides?: Pick<CreateLinksOptions, "generateAlias" | "now">,
+) => Links;
 
 export function linksContract(createTestLinks: LinksContractFactory) {
   const actor = { id: "user-1" };
@@ -135,7 +137,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       });
     });
 
-    it("appends a Destination Version only when the normalized Destination changes", async () => {
+    it("edits title and Destination atomically and increments the Link revision", async () => {
       const links = createTestLinks();
       const created = await links.execute(
         {
@@ -149,11 +151,14 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       if (!created.ok || created.kind !== "link") {
         throw new Error("expected Link creation to succeed");
       }
+      expect(created.link.revision).toBe(0);
 
       const unchanged = await links.execute(
         {
-          kind: "update-destination",
+          kind: "edit",
           linkId: created.link.id,
+          expectedRevision: 0,
+          title: "Documentation",
           destination: "https://example.com/",
         },
         actor,
@@ -162,13 +167,18 @@ export function linksContract(createTestLinks: LinksContractFactory) {
         ok: true,
         kind: "link",
         changed: false,
-        link: { destinationVersions: [{ destination: "https://example.com/" }] },
+        link: {
+          revision: 0,
+          destinationVersions: [{ destination: "https://example.com/", versionNumber: 1 }],
+        },
       });
 
       const changed = await links.execute(
         {
-          kind: "update-destination",
+          kind: "edit",
           linkId: created.link.id,
+          expectedRevision: 0,
+          title: "Updated documentation",
           destination: "https://example.com/v2",
         },
         actor,
@@ -178,11 +188,10 @@ export function linksContract(createTestLinks: LinksContractFactory) {
         kind: "link",
         changed: true,
         link: {
+          revision: 1,
+          title: "Updated documentation",
           state: "active",
-          destinationVersions: [
-            { destination: "https://example.com/" },
-            { destination: "https://example.com/v2" },
-          ],
+          destinationVersions: [{ destination: "https://example.com/v2", versionNumber: 2 }],
         },
       });
     });
@@ -203,36 +212,50 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       }
       const linkId = created.link.id;
 
-      const disabled = await links.execute({ kind: "disable", linkId }, actor);
+      const disabled = await links.execute({ kind: "disable", linkId, expectedRevision: 0 }, actor);
       expect(disabled).toMatchObject({
         ok: true,
         changed: true,
-        link: { state: "disabled" },
+        link: { state: "disabled", revision: 1 },
       });
       await expect(links.resolve("Docs")).resolves.toEqual({
         kind: "not-found",
       });
-      await expect(links.execute({ kind: "disable", linkId }, actor)).resolves.toMatchObject({
+      await expect(
+        links.execute({ kind: "disable", linkId, expectedRevision: 0 }, actor),
+      ).resolves.toEqual({
+        ok: false,
+        kind: "link-conflict",
+        currentRevision: 1,
+      });
+      await expect(
+        links.execute({ kind: "disable", linkId, expectedRevision: 1 }, actor),
+      ).resolves.toMatchObject({
         ok: true,
         changed: false,
       });
 
-      await expect(links.execute({ kind: "activate", linkId }, actor)).resolves.toMatchObject({
+      await expect(
+        links.execute({ kind: "activate", linkId, expectedRevision: 1 }, actor),
+      ).resolves.toMatchObject({
         ok: true,
         changed: true,
-        link: { state: "active" },
+        link: { state: "active", revision: 2 },
       });
-      await expect(links.execute({ kind: "archive", linkId }, actor)).resolves.toMatchObject({
+      await expect(
+        links.execute({ kind: "archive", linkId, expectedRevision: 2 }, actor),
+      ).resolves.toMatchObject({
         ok: true,
         changed: true,
-        link: { state: "archived" },
+        link: { state: "archived", revision: 3 },
       });
       await expect(links.resolve("Docs")).resolves.toEqual({ kind: "gone" });
       await expect(
         links.execute(
           {
-            kind: "update-destination",
+            kind: "edit",
             linkId,
+            expectedRevision: 3,
             destination: "https://example.com/new",
           },
           actor,
@@ -240,14 +263,16 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       ).resolves.toEqual({
         ok: false,
         kind: "invalid-state",
-        command: "update-destination",
+        command: "edit",
         state: "archived",
       });
 
-      await expect(links.execute({ kind: "restore", linkId }, actor)).resolves.toMatchObject({
+      await expect(
+        links.execute({ kind: "restore", linkId, expectedRevision: 3 }, actor),
+      ).resolves.toMatchObject({
         ok: true,
         changed: true,
-        link: { state: "disabled" },
+        link: { state: "disabled", revision: 4 },
       });
     });
 
@@ -267,17 +292,65 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       }
       const linkId = created.link.id;
 
-      await expect(links.execute({ kind: "permanently-delete", linkId }, actor)).resolves.toEqual({
+      await expect(
+        links.execute(
+          {
+            kind: "permanently-delete",
+            linkId,
+            expectedRevision: 0,
+            confirmationAlias: "Docs",
+          },
+          actor,
+        ),
+      ).resolves.toEqual({
         ok: false,
         kind: "invalid-state",
         command: "permanently-delete",
         state: "active",
       });
-      await links.execute({ kind: "archive", linkId }, actor);
-      await expect(links.execute({ kind: "permanently-delete", linkId }, actor)).resolves.toEqual({
+      await links.execute({ kind: "archive", linkId, expectedRevision: 0 }, actor);
+      await expect(
+        links.execute(
+          {
+            kind: "permanently-delete",
+            linkId,
+            expectedRevision: 1,
+            confirmationAlias: "docs",
+          },
+          actor,
+        ),
+      ).resolves.toEqual({
+        ok: false,
+        kind: "confirmation-mismatch",
+      });
+      await expect(
+        links.execute(
+          {
+            kind: "permanently-delete",
+            linkId,
+            expectedRevision: 1,
+            confirmationAlias: "Docs",
+          },
+          actor,
+        ),
+      ).resolves.toEqual({
         ok: true,
         kind: "deleted",
-        alias: "Docs",
+        reservedAlias: {
+          alias: "Docs",
+          deletedLinkId: linkId,
+          reservedAt: new Date("2026-07-23T00:00:00.000Z"),
+        },
+      });
+      await expect(
+        links.query({ kind: "reserved-aliases", search: "docs" }, actor),
+      ).resolves.toMatchObject({
+        ok: true,
+        kind: "reserved-alias-page",
+        page: {
+          items: [{ alias: "Docs", deletedLinkId: linkId }],
+          nextCursor: null,
+        },
       });
       await expect(links.resolve("Docs")).resolves.toEqual({ kind: "gone" });
 
@@ -297,13 +370,16 @@ export function linksContract(createTestLinks: LinksContractFactory) {
         alias: "Docs",
       });
 
-      await expect(links.execute({ kind: "release-alias", alias: "Docs" }, actor)).resolves.toEqual(
-        {
-          ok: true,
-          kind: "released",
-          alias: "Docs",
-        },
-      );
+      await expect(
+        links.execute({ kind: "release-alias", alias: "Docs", confirmationAlias: "docs" }, actor),
+      ).resolves.toEqual({ ok: false, kind: "confirmation-mismatch" });
+      await expect(
+        links.execute({ kind: "release-alias", alias: "Docs", confirmationAlias: "Docs" }, actor),
+      ).resolves.toEqual({
+        ok: true,
+        kind: "released",
+        alias: "Docs",
+      });
       await expect(links.resolve("Docs")).resolves.toEqual({
         kind: "not-found",
       });
@@ -382,8 +458,14 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       ) {
         throw new Error("expected Link creation to succeed");
       }
-      await links.execute({ kind: "disable", linkId: disabled.link.id }, actor);
-      await links.execute({ kind: "archive", linkId: archived.link.id }, actor);
+      await links.execute(
+        { kind: "disable", linkId: disabled.link.id, expectedRevision: 0 },
+        actor,
+      );
+      await links.execute(
+        { kind: "archive", linkId: archived.link.id, expectedRevision: 0 },
+        actor,
+      );
 
       const defaultPage = await links.query({ kind: "list", search: "docs" }, actor);
       expect(defaultPage).toMatchObject({
@@ -429,7 +511,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       });
     });
 
-    it("updates a Link title unless the Link is Archived", async () => {
+    it("edits a Link title unless the Link is Archived", async () => {
       const links = createTestLinks();
       const created = await links.execute(
         {
@@ -446,23 +528,23 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       const linkId = created.link.id;
 
       await expect(
-        links.execute({ kind: "update-title", linkId, title: " New title " }, actor),
+        links.execute({ kind: "edit", linkId, expectedRevision: 0, title: " New title " }, actor),
       ).resolves.toMatchObject({
         ok: true,
         changed: true,
-        link: { title: "New title" },
+        link: { title: "New title", revision: 1 },
       });
       await expect(
-        links.execute({ kind: "update-title", linkId, title: "New title" }, actor),
+        links.execute({ kind: "edit", linkId, expectedRevision: 1, title: "New title" }, actor),
       ).resolves.toMatchObject({ ok: true, changed: false });
 
-      await links.execute({ kind: "archive", linkId }, actor);
+      await links.execute({ kind: "archive", linkId, expectedRevision: 1 }, actor);
       await expect(
-        links.execute({ kind: "update-title", linkId, title: "No" }, actor),
+        links.execute({ kind: "edit", linkId, expectedRevision: 2, title: "No" }, actor),
       ).resolves.toEqual({
         ok: false,
         kind: "invalid-state",
-        command: "update-title",
+        command: "edit",
         state: "archived",
       });
     });
@@ -485,7 +567,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       });
     });
 
-    it("preserves every Destination Version across concurrent last-write-wins updates", async () => {
+    it("rejects a concurrent edit after one command advances the revision", async () => {
       const links = createTestLinks();
       const created = await links.execute(
         {
@@ -500,38 +582,254 @@ export function linksContract(createTestLinks: LinksContractFactory) {
         throw new Error("expected Link creation to succeed");
       }
 
-      await Promise.all([
+      const results = await Promise.all([
         links.execute(
           {
-            kind: "update-destination",
+            kind: "edit",
             linkId: created.link.id,
+            expectedRevision: 0,
             destination: "https://example.com/v2",
           },
           actor,
         ),
         links.execute(
           {
-            kind: "update-destination",
+            kind: "edit",
             linkId: created.link.id,
+            expectedRevision: 0,
             destination: "https://example.com/v3",
           },
           actor,
         ),
       ]);
 
+      expect(results).toEqual([
+        expect.objectContaining({
+          ok: true,
+          changed: true,
+          link: expect.objectContaining({ revision: 1 }),
+        }),
+        { ok: false, kind: "link-conflict", currentRevision: 1 },
+      ]);
       await expect(
         links.query({ kind: "detail", linkId: created.link.id }, actor),
       ).resolves.toMatchObject({
         ok: true,
         kind: "detail",
         link: {
-          destinationVersions: [
-            { destination: "https://example.com/v1" },
-            { destination: "https://example.com/v2" },
-            { destination: "https://example.com/v3" },
-          ],
+          revision: 1,
+          destinationVersions: [{ destination: "https://example.com/v2", versionNumber: 2 }],
         },
       });
+    });
+
+    it("pages Destination Version history newest first for an Archived Link", async () => {
+      const links = createTestLinks();
+      const created = await links.execute(
+        {
+          kind: "create",
+          alias: "Docs",
+          destination: "https://example.com/v1",
+          title: "Documentation",
+        },
+        actor,
+      );
+      if (!created.ok || created.kind !== "link") {
+        throw new Error("expected Link creation to succeed");
+      }
+      await links.execute(
+        {
+          kind: "edit",
+          linkId: created.link.id,
+          expectedRevision: 0,
+          destination: "https://example.com/v2",
+        },
+        actor,
+      );
+      await links.execute(
+        {
+          kind: "edit",
+          linkId: created.link.id,
+          expectedRevision: 1,
+          destination: "https://example.com/v3",
+        },
+        actor,
+      );
+      await links.execute({ kind: "archive", linkId: created.link.id, expectedRevision: 2 }, actor);
+
+      const first = await links.query(
+        { kind: "destination-versions", linkId: created.link.id, limit: 2 },
+        actor,
+      );
+      expect(first).toMatchObject({
+        ok: true,
+        kind: "destination-version-page",
+        page: {
+          items: [
+            { versionNumber: 3, destination: "https://example.com/v3" },
+            { versionNumber: 2, destination: "https://example.com/v2" },
+          ],
+          nextCursor: expect.any(String),
+        },
+      });
+      if (
+        !first.ok ||
+        first.kind !== "destination-version-page" ||
+        first.page.nextCursor === null
+      ) {
+        throw new Error("expected a Destination Version page");
+      }
+
+      await expect(
+        links.query(
+          {
+            kind: "destination-versions",
+            linkId: created.link.id,
+            limit: 2,
+            cursor: first.page.nextCursor,
+          },
+          actor,
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        kind: "destination-version-page",
+        page: {
+          items: [{ versionNumber: 1, destination: "https://example.com/v1" }],
+          nextCursor: null,
+        },
+      });
+    });
+
+    it("rejects a Destination Version cursor reused for another Link", async () => {
+      const links = createTestLinks();
+      const createdLinks = [];
+      for (const alias of ["FirstHistory", "SecondHistory"]) {
+        // oxlint-disable-next-line no-await-in-loop
+        const created = await links.execute(
+          {
+            kind: "create",
+            alias,
+            destination: `https://example.com/${alias.toLowerCase()}/v1`,
+            title: alias,
+          },
+          actor,
+        );
+        if (!created.ok || created.kind !== "link") {
+          throw new Error("expected Link creation to succeed");
+        }
+        // oxlint-disable-next-line no-await-in-loop
+        await links.execute(
+          {
+            kind: "edit",
+            linkId: created.link.id,
+            expectedRevision: 0,
+            destination: `https://example.com/${alias.toLowerCase()}/v2`,
+          },
+          actor,
+        );
+        createdLinks.push(created.link);
+      }
+
+      const first = await links.query(
+        { kind: "destination-versions", linkId: createdLinks[0]!.id, limit: 1 },
+        actor,
+      );
+      if (
+        !first.ok ||
+        first.kind !== "destination-version-page" ||
+        first.page.nextCursor === null
+      ) {
+        throw new Error("expected a paginated Destination Version page");
+      }
+
+      await expect(
+        links.query(
+          {
+            kind: "destination-versions",
+            linkId: createdLinks[1]!.id,
+            limit: 1,
+            cursor: first.page.nextCursor,
+          },
+          actor,
+        ),
+      ).resolves.toEqual({ ok: false, kind: "invalid-cursor" });
+    });
+
+    it("pages Reserved Aliases and binds the cursor to the search", async () => {
+      const links = createTestLinks();
+      for (const alias of ["alphaReserved", "BetaReserved"]) {
+        // oxlint-disable-next-line no-await-in-loop
+        const created = await links.execute(
+          {
+            kind: "create",
+            alias,
+            destination: `https://example.com/${alias.toLowerCase()}`,
+            title: alias,
+          },
+          actor,
+        );
+        if (!created.ok || created.kind !== "link") {
+          throw new Error("expected Link creation to succeed");
+        }
+        // oxlint-disable-next-line no-await-in-loop
+        await links.execute(
+          { kind: "archive", linkId: created.link.id, expectedRevision: 0 },
+          actor,
+        );
+        // oxlint-disable-next-line no-await-in-loop
+        await links.execute(
+          {
+            kind: "permanently-delete",
+            linkId: created.link.id,
+            expectedRevision: 1,
+            confirmationAlias: created.link.alias,
+          },
+          actor,
+        );
+      }
+
+      const first = await links.query(
+        { kind: "reserved-aliases", search: "reserved", limit: 1 },
+        actor,
+      );
+      expect(first).toMatchObject({
+        ok: true,
+        kind: "reserved-alias-page",
+        page: {
+          items: [{ alias: "BetaReserved" }],
+          nextCursor: expect.any(String),
+        },
+      });
+      if (!first.ok || first.kind !== "reserved-alias-page" || first.page.nextCursor === null) {
+        throw new Error("expected a paginated Reserved Alias page");
+      }
+
+      await expect(
+        links.query(
+          {
+            kind: "reserved-aliases",
+            search: "reserved",
+            limit: 1,
+            cursor: first.page.nextCursor,
+          },
+          actor,
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        kind: "reserved-alias-page",
+        page: { items: [{ alias: "alphaReserved" }], nextCursor: null },
+      });
+      await expect(
+        links.query(
+          {
+            kind: "reserved-aliases",
+            search: "alpha",
+            limit: 1,
+            cursor: first.page.nextCursor,
+          },
+          actor,
+        ),
+      ).resolves.toEqual({ ok: false, kind: "invalid-cursor" });
     });
 
     it("uses Unicode case folding for management search", async () => {
@@ -561,6 +859,112 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       ).resolves.toEqual({
         ok: false,
         kind: "invalid-cursor",
+      });
+    });
+
+    it("rejects cursor timestamps outside the JavaScript Date range", async () => {
+      const links = createTestLinks();
+      const linkCursor = btoa(
+        JSON.stringify({
+          v: 1,
+          kind: "links",
+          search: "",
+          states: ["active", "disabled"],
+          createdAt: Number.MAX_SAFE_INTEGER,
+          id: "link-id",
+        }),
+      ).replace(/=+$/, "");
+      const reservedAliasCursor = btoa(
+        JSON.stringify({
+          v: 1,
+          kind: "reserved-aliases",
+          search: "",
+          reservedAt: Number.MAX_SAFE_INTEGER,
+          alias: "Alias",
+        }),
+      ).replace(/=+$/, "");
+
+      await expect(links.query({ kind: "list", cursor: linkCursor }, actor)).resolves.toEqual({
+        ok: false,
+        kind: "invalid-cursor",
+      });
+      await expect(
+        links.query({ kind: "reserved-aliases", cursor: reservedAliasCursor }, actor),
+      ).resolves.toEqual({
+        ok: false,
+        kind: "invalid-cursor",
+      });
+    });
+
+    it("rejects a Link cursor reused with another search", async () => {
+      const links = createTestLinks();
+      for (const alias of ["DocsOne", "DocsTwo"]) {
+        // Sequential creation gives the page a deterministic ID tie-break.
+        // oxlint-disable-next-line no-await-in-loop
+        await links.execute(
+          {
+            kind: "create",
+            alias,
+            destination: `https://example.com/${alias.toLowerCase()}`,
+            title: alias,
+          },
+          actor,
+        );
+      }
+      const first = await links.query({ kind: "list", search: "docs", limit: 1 }, actor);
+      if (!first.ok || first.kind !== "page" || first.page.nextCursor === null) {
+        throw new Error("expected a paginated Link page");
+      }
+
+      await expect(
+        links.query(
+          { kind: "list", search: "other", limit: 1, cursor: first.page.nextCursor },
+          actor,
+        ),
+      ).resolves.toEqual({ ok: false, kind: "invalid-cursor" });
+    });
+
+    it("keeps Link pagination ordered by immutable creation time after an edit", async () => {
+      let clock = new Date("2026-07-21T00:00:00.000Z");
+      const links = createTestLinks({ now: () => clock });
+      const created = [];
+      for (const [index, alias] of ["First", "Second", "Third"].entries()) {
+        clock = new Date(`2026-07-${21 + index}T00:00:00.000Z`);
+        // Sequential writes establish the intended creation order.
+        // oxlint-disable-next-line no-await-in-loop
+        const result = await links.execute(
+          {
+            kind: "create",
+            alias,
+            destination: `https://example.com/${alias.toLowerCase()}`,
+            title: alias,
+          },
+          actor,
+        );
+        if (!result.ok || result.kind !== "link") {
+          throw new Error("expected Link creation to succeed");
+        }
+        created.push(result.link);
+      }
+
+      clock = new Date("2026-07-24T00:00:00.000Z");
+      await links.execute(
+        {
+          kind: "edit",
+          linkId: created[0]!.id,
+          expectedRevision: 0,
+          title: "Recently edited",
+        },
+        actor,
+      );
+
+      await expect(links.query({ kind: "list", limit: 2 }, actor)).resolves.toMatchObject({
+        ok: true,
+        kind: "page",
+        page: {
+          items: [{ alias: "Third" }, { alias: "Second" }],
+          nextCursor: expect.any(String),
+        },
       });
     });
 
@@ -594,8 +998,16 @@ export function linksContract(createTestLinks: LinksContractFactory) {
 
       const cursorLink = createdLinks[1];
       if (cursorLink === undefined) throw new Error("expected cursor Link");
-      await links.execute({ kind: "archive", linkId: cursorLink.id }, actor);
-      await links.execute({ kind: "permanently-delete", linkId: cursorLink.id }, actor);
+      await links.execute({ kind: "archive", linkId: cursorLink.id, expectedRevision: 0 }, actor);
+      await links.execute(
+        {
+          kind: "permanently-delete",
+          linkId: cursorLink.id,
+          expectedRevision: 1,
+          confirmationAlias: cursorLink.alias,
+        },
+        actor,
+      );
 
       await expect(
         links.query({ kind: "list", limit: 2, cursor: firstPage.page.nextCursor }, actor),
