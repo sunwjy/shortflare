@@ -85,6 +85,17 @@ const invitationDuration = 24 * 60 * 60 * 1_000;
 const passwordResetDuration = 30 * 60 * 1_000;
 const recentAuthenticationDuration = 10 * 60 * 1_000;
 
+/**
+ * Owns User lifecycle, credentials, one-time tokens, and Session policy for one
+ * Instance. Successful administrative User and credential changes persist their
+ * Audit Event in the same D1 batch; rejected and no-op operations must not leave
+ * an Audit Event. Session creation and refresh are intentionally not Audit
+ * Events.
+ *
+ * Token-returning methods expose the plaintext secret exactly once while only
+ * its hash is persisted. Callers are responsible for transport authorization
+ * and for delivering that secret without logging it.
+ */
 export function createIdentity(options: IdentityOptions) {
   const now = options.now ?? (() => new Date());
   const randomId = options.randomId ?? (() => crypto.randomUUID());

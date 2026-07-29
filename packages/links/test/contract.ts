@@ -704,7 +704,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       const links = createTestLinks();
       const createdLinks = [];
       for (const alias of ["FirstHistory", "SecondHistory"]) {
-        // oxlint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- Each fixture write must finish before its dependent edit.
         const created = await links.execute(
           {
             kind: "create",
@@ -717,7 +717,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
         if (!created.ok || created.kind !== "link") {
           throw new Error("expected Link creation to succeed");
         }
-        // oxlint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- This edit depends on the Link created immediately above.
         await links.execute(
           {
             kind: "edit",
@@ -758,7 +758,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
     it("pages Reserved Aliases and binds the cursor to the search", async () => {
       const links = createTestLinks();
       for (const alias of ["alphaReserved", "BetaReserved"]) {
-        // oxlint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- Reserved Alias fixtures intentionally share deterministic write order.
         const created = await links.execute(
           {
             kind: "create",
@@ -771,12 +771,12 @@ export function linksContract(createTestLinks: LinksContractFactory) {
         if (!created.ok || created.kind !== "link") {
           throw new Error("expected Link creation to succeed");
         }
-        // oxlint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- Archival consumes the revision from the preceding creation.
         await links.execute(
           { kind: "archive", linkId: created.link.id, expectedRevision: 0 },
           actor,
         );
-        // oxlint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- Deletion consumes the revision from the preceding archival.
         await links.execute(
           {
             kind: "permanently-delete",
@@ -900,7 +900,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       const links = createTestLinks();
       for (const alias of ["DocsOne", "DocsTwo"]) {
         // Sequential creation gives the page a deterministic ID tie-break.
-        // oxlint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- Sequential creation establishes the pagination tie-break order.
         await links.execute(
           {
             kind: "create",
@@ -931,7 +931,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       for (const [index, alias] of ["First", "Second", "Third"].entries()) {
         clock = new Date(`2026-07-${21 + index}T00:00:00.000Z`);
         // Sequential writes establish the intended creation order.
-        // oxlint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- Sequential writes establish immutable creation order for this clock.
         const result = await links.execute(
           {
             kind: "create",
@@ -974,7 +974,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
       for (const alias of ["First", "Second", "Third"]) {
         // These writes are intentionally sequential so their generated IDs
         // define the expected tie-break order for the fixed test timestamp.
-        // oxlint-disable-next-line no-await-in-loop
+        // oxlint-disable-next-line no-await-in-loop -- Fixed timestamps require sequential IDs for deterministic pagination.
         const created = await links.execute(
           {
             kind: "create",

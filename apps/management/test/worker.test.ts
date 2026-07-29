@@ -701,7 +701,7 @@ describe("management worker", () => {
 
     for (const [command, expectedRevision, state, revision] of commands) {
       // Each transition consumes the revision returned by the prior command.
-      // oxlint-disable-next-line no-await-in-loop
+      // oxlint-disable-next-line no-await-in-loop -- Each transition consumes the revision produced by the previous request.
       const response = await app.request(
         `https://management.test/api/internal/links/${created.link.id}/${command}`,
         {
@@ -712,7 +712,7 @@ describe("management worker", () => {
         env,
       );
       expect(response.status).toBe(200);
-      // oxlint-disable-next-line no-await-in-loop
+      // oxlint-disable-next-line no-await-in-loop -- The response belongs to the sequential transition immediately above.
       await expect(response.json()).resolves.toEqual({
         ok: true,
         changed: true,
@@ -742,7 +742,7 @@ describe("management worker", () => {
       [1, "https://example.com/v3"],
     ] as const) {
       // Sequential edits create deterministic Destination Version numbers.
-      // oxlint-disable-next-line no-await-in-loop
+      // oxlint-disable-next-line no-await-in-loop -- Each edit consumes the revision produced by the previous edit.
       await app.request(
         `https://management.test/api/internal/links/${created.link.id}`,
         {

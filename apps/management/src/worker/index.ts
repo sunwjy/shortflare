@@ -1,70 +1,43 @@
 import { createD1LinksPersistence } from "@shortflare/database";
-import { createLinks, type Link, type LinkState, type LinkSummary } from "@shortflare/links";
+import { createLinks } from "@shortflare/links";
 import { type Context, Hono } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { z } from "zod";
+import { getCookie } from "hono/cookie";
 
-import { type Capability, hasCapability } from "./authorization";
-import { createIdentity, type User } from "./identity";
+import type { ManagementEnvironment } from "./environment";
+import {
+  apiError,
+  authenticateMutation,
+  authenticateSafe,
+  deleteSessionCookie,
+  isSameOriginJsonRequest,
+  parseJson,
+  parseLinkListQuery,
+  parsePageQuery,
+  parseReservedAliasListQuery,
+  setSessionCookie,
+  toLinkDto,
+  toLinkSummaryDto,
+  toReservedAliasDto,
+} from "./http";
+import { createIdentity } from "./identity";
+import {
+  confirmationRequest,
+  createLinkRequest,
+  editLinkRequest,
+  emptyRequest,
+  healthResponse,
+  invitationRequest,
+  loginRequest,
+  passwordChangeRequest,
+  passwordRequest,
+  permanentDeleteRequest,
+  revisionRequest,
+  roleRequest,
+  setupRequest,
+  tokenPasswordRequest,
+} from "./request-schemas";
 
-const healthResponse = z.object({ status: z.literal("ok") });
-const createLinkRequest = z.strictObject({
-  alias: z.string().optional(),
-  title: z.string(),
-  destination: z.string(),
-});
-const editLinkRequest = z
-  .strictObject({
-    expectedRevision: z.number().int().nonnegative(),
-    title: z.string().optional(),
-    destination: z.string().optional(),
-  })
-  .refine((request) => request.title !== undefined || request.destination !== undefined);
-const revisionRequest = z.strictObject({
-  expectedRevision: z.number().int().nonnegative(),
-});
-const permanentDeleteRequest = z.strictObject({
-  expectedRevision: z.number().int().nonnegative(),
-  confirmationAlias: z.string(),
-});
-const confirmationRequest = z.strictObject({
-  confirmationAlias: z.string(),
-});
-const setupRequest = z.strictObject({
-  token: z.string(),
-  password: z.string(),
-});
-const loginRequest = z.strictObject({
-  email: z.string(),
-  password: z.string(),
-});
-const invitationRequest = z.strictObject({
-  email: z.string(),
-  role: z.enum(["administrator", "member", "viewer"]),
-});
-const tokenPasswordRequest = z.strictObject({
-  token: z.string(),
-  password: z.string(),
-});
-const passwordRequest = z.strictObject({
-  password: z.string(),
-});
-const passwordChangeRequest = z.strictObject({
-  currentPassword: z.string(),
-  password: z.string(),
-});
-const roleRequest = z.strictObject({
-  role: z.enum(["administrator", "member", "viewer"]),
-});
-const emptyRequest = z.strictObject({});
-
-type Bindings = {
-  DB: D1Database;
-  REDIRECT_DOMAIN: string;
-};
-type AppEnvironment = { Bindings: Bindings };
-
-export const app = new Hono<AppEnvironment>();
+export const app = new Hono<ManagementEnvironment>();
 
 app.use("*", async (context, next) => {
   await next();
@@ -678,15 +651,7 @@ app.post("/api/internal/reserved-aliases/:alias/release", async (context) => {
   throw new Error(`Unexpected Reserved Alias release failure: ${result.kind}`);
 });
 
-function isSameOriginJsonRequest(request: Request) {
-  return (
-    request.headers.get("origin") === new URL(request.url).origin &&
-    request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ===
-      "application/json"
-  );
-}
-
-function createLinksForContext(context: Context<AppEnvironment>) {
+function createLinksForContext(context: Context<ManagementEnvironment>) {
   return createLinks({
     persistence: createD1LinksPersistence(context.env.DB),
     redirectDomain: context.env.REDIRECT_DOMAIN,
@@ -694,7 +659,7 @@ function createLinksForContext(context: Context<AppEnvironment>) {
 }
 
 async function executeLinkStateCommand(
-  context: Context<AppEnvironment>,
+  context: Context<ManagementEnvironment>,
   linkId: string,
   kind: "activate" | "disable" | "archive" | "restore",
 ) {
@@ -738,287 +703,6 @@ async function executeLinkStateCommand(
     );
   }
   throw new Error(`Unexpected Link state failure: ${result.kind}`);
-}
-
-function parseLinkListQuery(request: Request):
-  | Readonly<{
-      search?: string;
-      states?: readonly LinkState[];
-      limit?: number;
-      cursor?: string;
-    }>
-  | undefined {
-  const parameters = new URL(request.url).searchParams;
-  const allowed = new Set(["search", "state", "limit", "cursor"]);
-  if (Array.from(parameters.keys()).some((key) => !allowed.has(key))) return undefined;
-
-  const searchValues = parameters.getAll("search");
-  const limitValues = parameters.getAll("limit");
-  const cursorValues = parameters.getAll("cursor");
-  if (searchValues.length > 1 || limitValues.length > 1 || cursorValues.length > 1) {
-    return undefined;
-  }
-
-  const search = searchValues[0]?.trim();
-  if (search !== undefined && Array.from(search).length > 200) return undefined;
-  const states = parameters.getAll("state");
-  if (
-    states.some(
-      (state): boolean => state !== "active" && state !== "disabled" && state !== "archived",
-    )
-  ) {
-    return undefined;
-  }
-  const limit = parseLimit(limitValues[0]);
-  if (limitValues.length === 1 && limit === undefined) return undefined;
-  const cursor = cursorValues[0];
-  if (cursorValues.length === 1 && cursor === "") return undefined;
-
-  return {
-    ...(search === undefined ? {} : { search }),
-    ...(states.length === 0 ? {} : { states: states as LinkState[] }),
-    ...(limit === undefined ? {} : { limit }),
-    ...(cursor === undefined ? {} : { cursor }),
-  };
-}
-
-function parsePageQuery(
-  request: Request,
-): Readonly<{ limit?: number; cursor?: string }> | undefined {
-  const parameters = new URL(request.url).searchParams;
-  if (Array.from(parameters.keys()).some((key) => key !== "limit" && key !== "cursor")) {
-    return undefined;
-  }
-  const limitValues = parameters.getAll("limit");
-  const cursorValues = parameters.getAll("cursor");
-  if (limitValues.length > 1 || cursorValues.length > 1) return undefined;
-  const limit = parseLimit(limitValues[0]);
-  if (limitValues.length === 1 && limit === undefined) return undefined;
-  const cursor = cursorValues[0];
-  if (cursorValues.length === 1 && cursor === "") return undefined;
-  return {
-    ...(limit === undefined ? {} : { limit }),
-    ...(cursor === undefined ? {} : { cursor }),
-  };
-}
-
-function parseReservedAliasListQuery(
-  request: Request,
-): Readonly<{ search?: string; limit?: number; cursor?: string }> | undefined {
-  const parameters = new URL(request.url).searchParams;
-  if (
-    Array.from(parameters.keys()).some(
-      (key) => key !== "search" && key !== "limit" && key !== "cursor",
-    )
-  ) {
-    return undefined;
-  }
-  const searchValues = parameters.getAll("search");
-  const limitValues = parameters.getAll("limit");
-  const cursorValues = parameters.getAll("cursor");
-  if (searchValues.length > 1 || limitValues.length > 1 || cursorValues.length > 1) {
-    return undefined;
-  }
-  const search = searchValues[0]?.trim();
-  if (search !== undefined && Array.from(search).length > 200) return undefined;
-  const limit = parseLimit(limitValues[0]);
-  if (limitValues.length === 1 && limit === undefined) return undefined;
-  const cursor = cursorValues[0];
-  if (cursorValues.length === 1 && cursor === "") return undefined;
-  return {
-    ...(search === undefined ? {} : { search }),
-    ...(limit === undefined ? {} : { limit }),
-    ...(cursor === undefined ? {} : { cursor }),
-  };
-}
-
-function parseLimit(value: string | undefined): number | undefined {
-  if (value === undefined || !/^[1-9]\d*$/.test(value)) return undefined;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed <= 100 ? parsed : undefined;
-}
-
-function apiError(kind: string, details: Record<string, unknown> = {}) {
-  return { ok: false as const, kind, details };
-}
-
-function authenticationError(kind: string, withDetails = false) {
-  return withDetails ? apiError(kind) : { ok: false as const, kind };
-}
-
-function toLinkDto(link: Link, redirectDomain: string) {
-  const destination = link.destinationVersions.at(-1);
-  if (destination === undefined) {
-    throw new Error(`Link ${link.id} has no Destination Version`);
-  }
-  return {
-    id: link.id,
-    alias: link.alias,
-    shortUrl: new URL(link.alias, `https://${redirectDomain}/`).href,
-    title: link.title,
-    state: link.state,
-    revision: link.revision,
-    destination: {
-      id: destination.id,
-      versionNumber: destination.versionNumber,
-      url: destination.destination,
-      createdAt: destination.createdAt.toISOString(),
-    },
-    createdAt: link.createdAt.toISOString(),
-    updatedAt: link.updatedAt.toISOString(),
-  };
-}
-
-function toLinkSummaryDto(link: LinkSummary, redirectDomain: string) {
-  const destination = link.currentDestinationVersion;
-  return {
-    id: link.id,
-    alias: link.alias,
-    shortUrl: new URL(link.alias, `https://${redirectDomain}/`).href,
-    title: link.title,
-    state: link.state,
-    revision: link.revision,
-    destination: {
-      id: destination.id,
-      versionNumber: destination.versionNumber,
-      url: destination.destination,
-      createdAt: destination.createdAt.toISOString(),
-    },
-    createdAt: link.createdAt.toISOString(),
-    updatedAt: link.updatedAt.toISOString(),
-  };
-}
-
-function toReservedAliasDto(
-  alias: Readonly<{ alias: string; deletedLinkId: string; reservedAt: Date }>,
-  redirectDomain: string,
-) {
-  return {
-    alias: alias.alias,
-    shortUrl: new URL(alias.alias, `https://${redirectDomain}/`).href,
-    deletedLinkId: alias.deletedLinkId,
-    reservedAt: alias.reservedAt.toISOString(),
-  };
-}
-
-async function parseJson<Schema extends z.ZodType>(
-  request: Request,
-  schema: Schema,
-): Promise<z.output<Schema> | undefined> {
-  try {
-    const result = schema.safeParse(await request.json());
-    return result.success ? result.data : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function deleteSessionCookie(context: Parameters<typeof deleteCookie>[0]) {
-  deleteCookie(context, "__Host-shortflare_session", {
-    path: "/",
-    secure: true,
-  });
-}
-
-function setSessionCookie(
-  context: Context<AppEnvironment>,
-  session: Readonly<{ token: string; expiresAt: Date }>,
-) {
-  const maxAge = Math.max(0, Math.floor((session.expiresAt.getTime() - Date.now()) / 1_000));
-  setCookie(context, "__Host-shortflare_session", session.token, {
-    httpOnly: true,
-    maxAge,
-    path: "/",
-    sameSite: "Lax",
-    secure: true,
-  });
-}
-
-async function authenticateMutation(
-  context: Context<AppEnvironment>,
-  requirements: Readonly<{
-    capability?: Capability;
-    recent?: boolean;
-    apiErrors?: boolean;
-  }> = {},
-): Promise<
-  | Readonly<{
-      identity: ReturnType<typeof createIdentity>;
-      user: User;
-      sessionToken: string;
-      recentlyAuthenticated: boolean;
-    }>
-  | Readonly<{ response: Response }>
-> {
-  if (!isSameOriginJsonRequest(context.req.raw)) {
-    return {
-      response: context.json(authenticationError("forbidden", requirements.apiErrors), 403),
-    };
-  }
-  const sessionToken = getCookie(context, "__Host-shortflare_session");
-  if (!sessionToken) {
-    return {
-      response: context.json(authenticationError("unauthenticated", requirements.apiErrors), 401),
-    };
-  }
-  const identity = createIdentity({ db: context.env.DB });
-  const authentication = await identity.authenticateRequest(
-    sessionToken,
-    context.req.header("x-csrf-token") ?? "",
-    requirements.recent,
-  );
-  if (!authentication.ok) {
-    const unauthenticated = authentication.kind === "invalid-credentials";
-    return {
-      response: context.json(
-        authenticationError(
-          unauthenticated ? "unauthenticated" : authentication.kind,
-          requirements.apiErrors,
-        ),
-        unauthenticated ? 401 : 403,
-      ),
-    };
-  }
-  if (requirements.capability && !hasCapability(authentication.user, requirements.capability)) {
-    return {
-      response: context.json(authenticationError("forbidden", requirements.apiErrors), 403),
-    };
-  }
-  return {
-    identity,
-    user: authentication.user,
-    sessionToken,
-    recentlyAuthenticated: authentication.recentlyAuthenticated,
-  };
-}
-
-async function authenticateSafe(
-  context: Context<AppEnvironment>,
-  capability?: Capability,
-  apiErrors = false,
-): Promise<
-  | Readonly<{ identity: ReturnType<typeof createIdentity>; user: User }>
-  | Readonly<{ response: Response }>
-> {
-  const sessionToken = getCookie(context, "__Host-shortflare_session");
-  if (!sessionToken) {
-    return {
-      response: context.json(authenticationError("unauthenticated", apiErrors), 401),
-    };
-  }
-  const identity = createIdentity({ db: context.env.DB });
-  const authentication = await identity.authenticate(sessionToken);
-  if (!authentication.ok) {
-    return {
-      response: context.json(authenticationError("unauthenticated", apiErrors), 401),
-    };
-  }
-  if (capability && !hasCapability(authentication.user, capability)) {
-    return {
-      response: context.json(authenticationError("forbidden", apiErrors), 403),
-    };
-  }
-  return { identity, user: authentication.user };
 }
 
 export default app;

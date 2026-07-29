@@ -8,6 +8,8 @@
   "plugins": ["import", "typescript", "unicorn", "react", "react-perf"],
   "rules": {
     "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
+    "react-perf/jsx-no-new-function-as-prop": "off",
+    "react-perf/jsx-no-new-object-as-prop": "off",
     "react/react-in-jsx-scope": "off"
   },
   "ignorePatterns": [

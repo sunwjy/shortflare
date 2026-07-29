@@ -21,6 +21,14 @@ import {
   validateDestination,
 } from "./values";
 
+/**
+ * Creates the Links application module.
+ *
+ * The interface owns Link invariants, commands, pagination cursors, and redirect
+ * decisions. Its persistence adapter owns storage and atomicity; callers own
+ * authorization and transport effects. Every command returns a discriminated
+ * result instead of throwing for an expected domain rejection.
+ */
 export function createLinks(options: CreateLinksOptions): Links {
   const generateId = options.generateId ?? (() => crypto.randomUUID());
   const generateAlias = options.generateAlias ?? (() => generateRandomAlias());
@@ -165,14 +173,18 @@ export function createLinks(options: CreateLinksOptions): Links {
       }
 
       const attemptCount = command.alias === undefined ? 32 : 1;
-      for (let attempt = 0; attempt < attemptCount; attempt += 1) {
+      const attemptCreate = async (attempt: number): Promise<LinkResult> => {
+        if (attempt >= attemptCount) {
+          return { ok: false, kind: "alias-generation-exhausted" };
+        }
+
         const aliasInput = command.alias ?? generateAlias();
         const alias = parseAlias(aliasInput);
         if (alias === null) {
           if (command.alias !== undefined) {
             return { ok: false, kind: "invalid-alias", alias: aliasInput };
           }
-          continue;
+          return attemptCreate(attempt + 1);
         }
 
         const timestamp = now();
@@ -193,9 +205,8 @@ export function createLinks(options: CreateLinksOptions): Links {
           createdAt: timestamp,
           updatedAt: timestamp,
         };
-        // Generated Alias attempts are deliberately sequential: create()
-        // performs the authoritative collision check for each candidate.
-        // oxlint-disable-next-line no-await-in-loop
+        // create() performs the authoritative collision check, so generated
+        // candidates must be tried sequentially rather than with Promise.all.
         const created = await options.persistence.create(link, {
           actor,
           action: command.kind,
@@ -210,9 +221,10 @@ export function createLinks(options: CreateLinksOptions): Links {
             ? { ok: false, kind: "alias-in-use", alias }
             : { ok: false, kind: "alias-reserved", alias };
         }
-      }
+        return attemptCreate(attempt + 1);
+      };
 
-      return { ok: false, kind: "alias-generation-exhausted" };
+      return attemptCreate(0);
     },
     async query(query) {
       if (query.kind === "detail") {

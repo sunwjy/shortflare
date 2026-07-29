@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "turbo run build",
-    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build",
+    "check": "pnpm lint && pnpm check:deprecated && pnpm format:check && pnpm typecheck && pnpm test && pnpm build",
+    "check:deprecated": "node packages/tooling/scripts/check-deprecated-apis.mjs apps/management/tsconfig.json apps/redirect-worker/tsconfig.json packages/analytics/tsconfig.json packages/database/tsconfig.json packages/deploy/tsconfig.json packages/links/tsconfig.json",
     "dev": "turbo run dev --parallel",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

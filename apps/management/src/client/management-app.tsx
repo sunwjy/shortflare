@@ -1,4 +1,3 @@
-/* oxlint-disable react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop -- Route-level interaction handlers and search objects are intentionally colocated with their screens. */
 import {
   QueryClient,
   QueryClientProvider,

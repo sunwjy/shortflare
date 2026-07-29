@@ -15,9 +15,6 @@ import {
   parseAlias,
 } from "@shortflare/links";
 
-// Optimistic-concurrency retries must observe the result of the prior attempt.
-// oxlint-disable no-await-in-loop
-
 type LinkRow = {
   id: string;
   alias: string;
@@ -50,6 +47,14 @@ export type CreateD1LinksPersistenceOptions = Readonly<{
   generateAuditId?: () => string;
 }>;
 
+/**
+ * D1 adapter for the Links persistence seam.
+ *
+ * Mutations keep the Link change and Audit Event in one D1 batch. Optimistic
+ * conflicts are reported through the interface; storage corruption and
+ * exhausted internal retries throw because callers cannot safely reinterpret
+ * either condition as a domain result.
+ */
 export function createD1LinksPersistence(
   database: D1Database,
   options: CreateD1LinksPersistenceOptions = {},
@@ -773,15 +778,21 @@ async function retryStoredLinkMutation<Result>(
   operation: string,
   mutate: (stored: StoredLink) => Promise<Result | typeof retryMutation>,
   notFound: () => Result,
+  attempt = 0,
 ): Promise<Result> {
-  for (let attempt = 0; attempt < maximumMutationAttempts; attempt += 1) {
-    const stored = await readStoredLink(database, "l.id = ?", linkId);
-    if (stored === null) return notFound();
-
-    const result = await mutate(stored);
-    if (result !== retryMutation) return result;
+  if (attempt >= maximumMutationAttempts) {
+    throw concurrencyError(operation);
   }
-  throw concurrencyError(operation);
+
+  // A retry must observe the committed result of the previous attempt. Recursion
+  // makes that sequencing explicit without suppressing no-await-in-loop.
+  const stored = await readStoredLink(database, "l.id = ?", linkId);
+  if (stored === null) return notFound();
+
+  const result = await mutate(stored);
+  return result === retryMutation
+    ? retryStoredLinkMutation(database, linkId, operation, mutate, notFound, attempt + 1)
+    : result;
 }
 
 function assertAlias(value: string): Alias {

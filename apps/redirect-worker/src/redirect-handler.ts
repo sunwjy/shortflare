@@ -10,6 +10,11 @@ export type RedirectWorkerEnvironment = {
 
 type CachedDecision = RedirectDecision | undefined;
 
+/**
+ * Resolves one Alias while treating the data-center cache as best effort.
+ * Cache failures never block D1 resolution, D1 failures return 503, and cache
+ * writes run after the response through the Worker's execution context.
+ */
 export async function handleRedirect(context: Context<RedirectWorkerEnvironment>, alias: string) {
   const url = new URL(context.req.url);
   const cacheKey = createResolutionCacheKey(url, alias);

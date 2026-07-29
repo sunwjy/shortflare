@@ -1,4 +1,3 @@
-/* oxlint-disable react-perf/jsx-no-new-function-as-prop -- Authentication form handlers are intentionally local to each screen. */
 import { type FormEvent, useState } from "react";
 
 import { apiRequest, ApiError } from "./api";
