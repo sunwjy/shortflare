@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { CreateLinksOptions, Links } from "../src/index";
+import type { CreateLinksOptions } from "../src/persistence";
+import type { Links } from "../src/index";
 
 type LinksContractFactory = (
   overrides?: Pick<CreateLinksOptions, "generateAlias" | "now">,

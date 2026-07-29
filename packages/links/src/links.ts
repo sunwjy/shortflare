@@ -1,14 +1,9 @@
+import type { EditLinkCommand, Link, LinkResult, Links, StateCommand, LinkState } from "./types";
 import type {
   CreateLinksOptions,
-  EditLinkCommand,
-  Link,
-  LinkResult,
-  Links,
   PersistedLinkMutation,
   PersistenceListQuery,
-  StateCommand,
-  LinkState,
-} from "./types";
+} from "./persistence";
 import {
   generateRandomAlias,
   decodeDestinationVersionCursor,

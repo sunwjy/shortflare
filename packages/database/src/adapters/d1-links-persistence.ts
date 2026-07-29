@@ -1,12 +1,9 @@
+import type { Alias, DestinationVersion, Link, LinkState } from "@shortflare/links";
 import type {
-  Alias,
-  DestinationVersion,
-  Link,
   LinkMutationContext,
-  LinkState,
   LinksPersistence,
   PersistedLinkMutation,
-} from "@shortflare/links";
+} from "@shortflare/links/persistence";
 import {
   encodeDestinationVersionCursor,
   encodeListCursor,

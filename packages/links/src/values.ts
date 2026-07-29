@@ -1,4 +1,5 @@
-import type { Alias, LinkResult, PersistenceListQuery } from "./types";
+import type { PersistenceListQuery } from "./persistence";
+import type { Alias, LinkResult } from "./types";
 
 const aliasPattern = /^[A-Za-z0-9_-]{1,64}$/;
 const aliasAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
