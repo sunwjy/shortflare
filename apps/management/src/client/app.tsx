@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { apiRequest } from "./api";
+import { jsonRequest } from "./api";
+import { sessionResponseSchema } from "./api-schemas";
 import { LoginScreen, TokenPasswordScreen } from "./auth-screens";
 import { ManagementApp } from "./management-app";
 import { applyTheme, readTheme, type Theme } from "./theme";
-import type { Session, TokenRoute, User } from "./types";
+import type { Session, TokenRoute } from "./types";
 
 export function App() {
   const tokenRoute = useMemo(readTokenRoute, []);
@@ -21,7 +22,7 @@ export function App() {
       setLoading(false);
       return;
     }
-    void apiRequest<{ user: User; csrfToken: string }>("/api/internal/auth/session")
+    void jsonRequest("/api/internal/auth/session", sessionResponseSchema)
       .then((response) => {
         setSession({ user: response.user, csrfToken: response.csrfToken });
       })

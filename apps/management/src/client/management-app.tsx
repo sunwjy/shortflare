@@ -36,18 +36,23 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
-import { ApiError, apiRequest } from "./api";
+import { ApiError, jsonRequest, noContentRequest } from "./api";
+import {
+  deletedLinkResponseSchema,
+  destinationVersionsPageResponseSchema,
+  invitationResponseSchema,
+  linkMutationResponseSchema,
+  linkResponseSchema,
+  linksPageResponseSchema,
+  passwordChangedResponseSchema,
+  reservedAliasesPageResponseSchema,
+  sessionResponseSchema,
+  usersResponseSchema,
+} from "./api-schemas";
 import { Button } from "./components/ui/button";
 import { Dialog } from "./components/ui/dialog";
 import type { Theme } from "./theme";
-import type {
-  DestinationVersionDto,
-  LinkDto,
-  LinkState,
-  Page,
-  ReservedAliasDto,
-  Session,
-} from "./types";
+import type { LinkDto, LinkState, ReservedAliasDto, Session } from "./types";
 
 type ManagementRouterContext = Readonly<{
   session: Session;
@@ -170,7 +175,7 @@ function AppShell() {
   const [mobileMenu, setMobileMenu] = useState(false);
 
   async function logout() {
-    await apiRequest("/api/internal/auth/logout", {
+    await noContentRequest("/api/internal/auth/logout", {
       method: "POST",
       csrfToken: session.csrfToken,
       body: {},
@@ -290,13 +295,12 @@ function UsersPage() {
   const [invitationLink, setInvitationLink] = useState("");
   const users = useQuery({
     queryKey: ["users"],
-    queryFn: () =>
-      apiRequest<{ ok: true; users: readonly Session["user"][] }>("/api/internal/users"),
+    queryFn: () => jsonRequest("/api/internal/users", usersResponseSchema),
     enabled: session.user.role === "administrator",
   });
   const invitation = useMutation({
     mutationFn: () =>
-      apiRequest<{ ok: true; invitation: { token: string } }>("/api/internal/users/invitations", {
+      jsonRequest("/api/internal/users/invitations", invitationResponseSchema, {
         method: "POST",
         csrfToken: session.csrfToken,
         body: { email, role },
@@ -404,7 +408,7 @@ function SecurityPage() {
     event.preventDefault();
     setNotice("");
     try {
-      await apiRequest("/api/internal/auth/password", {
+      await jsonRequest("/api/internal/auth/password", passwordChangedResponseSchema, {
         method: "POST",
         csrfToken: session.csrfToken,
         body: { currentPassword, password: newPassword },
@@ -416,7 +420,7 @@ function SecurityPage() {
   }
 
   async function logout() {
-    await apiRequest("/api/internal/auth/logout", {
+    await noContentRequest("/api/internal/auth/logout", {
       method: "POST",
       csrfToken: session.csrfToken,
       body: {},
@@ -481,7 +485,8 @@ function LinksPage() {
   const [collection, setCollection] = useState<"links" | "reserved">("links");
   const links = useInfiniteQuery({
     queryKey: ["links", search],
-    queryFn: ({ pageParam }) => apiRequest<Page<LinkDto>>(linkListPath(search, pageParam)),
+    queryFn: ({ pageParam }) =>
+      jsonRequest(linkListPath(search, pageParam), linksPageResponseSchema),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
@@ -651,7 +656,7 @@ function ReservedAliases() {
   const aliases = useInfiniteQuery({
     queryKey: ["reserved-aliases", submittedSearch],
     queryFn: ({ pageParam }) =>
-      apiRequest<Page<ReservedAliasDto>>(
+      jsonRequest(
         `/api/internal/reserved-aliases${
           submittedSearch || pageParam
             ? `?${new URLSearchParams({
@@ -660,6 +665,7 @@ function ReservedAliases() {
               })}`
             : ""
         }`,
+        reservedAliasesPageResponseSchema,
       ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
@@ -732,7 +738,7 @@ function ReservedAliases() {
           onSession={onSession}
           onClose={() => setSelected(undefined)}
           execute={(csrfToken) =>
-            apiRequest<void>(
+            noContentRequest(
               `/api/internal/reserved-aliases/${encodeURIComponent(selected.alias)}/release`,
               {
                 method: "POST",
@@ -763,7 +769,7 @@ function CreateLinkPanel() {
 
   const creation = useMutation({
     mutationFn: () =>
-      apiRequest<{ ok: true; link: LinkDto }>("/api/internal/links", {
+      jsonRequest("/api/internal/links", linkResponseSchema, {
         method: "POST",
         csrfToken: session.csrfToken,
         body: {
@@ -896,33 +902,31 @@ function LinkDetailPanel() {
   const link = useQuery({
     queryKey: ["link", linkId],
     queryFn: () =>
-      apiRequest<{ ok: true; link: LinkDto }>(`/api/internal/links/${encodeURIComponent(linkId)}`),
+      jsonRequest(`/api/internal/links/${encodeURIComponent(linkId)}`, linkResponseSchema),
   });
   const versions = useInfiniteQuery({
     queryKey: ["destination-versions", linkId],
     queryFn: ({ pageParam }) =>
-      apiRequest<Page<DestinationVersionDto> & Readonly<{ currentVersionNumber: number }>>(
+      jsonRequest(
         `/api/internal/links/${encodeURIComponent(linkId)}/destination-versions${
           pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ""
         }`,
+        destinationVersionsPageResponseSchema,
       ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
   const edit = useMutation({
     mutationFn: () =>
-      apiRequest<{ ok: true; changed: boolean; link: LinkDto }>(
-        `/api/internal/links/${encodeURIComponent(linkId)}`,
-        {
-          method: "PATCH",
-          csrfToken: session.csrfToken,
-          body: {
-            expectedRevision: link.data?.link.revision,
-            title: titleDraft,
-            destination: destinationDraft,
-          },
+      jsonRequest(`/api/internal/links/${encodeURIComponent(linkId)}`, linkMutationResponseSchema, {
+        method: "PATCH",
+        csrfToken: session.csrfToken,
+        body: {
+          expectedRevision: link.data?.link.revision,
+          title: titleDraft,
+          destination: destinationDraft,
         },
-      ),
+      }),
     onSuccess: async ({ link: updatedLink }) => {
       queryClient.setQueryData(["link", linkId], { ok: true, link: updatedLink });
       setConflict(undefined);
@@ -940,8 +944,9 @@ function LinkDetailPanel() {
         ]);
         return;
       }
-      const latest = await apiRequest<{ ok: true; link: LinkDto }>(
+      const latest = await jsonRequest(
         `/api/internal/links/${encodeURIComponent(linkId)}`,
+        linkResponseSchema,
       );
       queryClient.setQueryData(["link", linkId], latest);
       setConflict(latest.link);
@@ -949,8 +954,9 @@ function LinkDetailPanel() {
   });
   const stateChange = useMutation({
     mutationFn: (command: "activate" | "disable" | "archive" | "restore") =>
-      apiRequest<{ ok: true; changed: boolean; link: LinkDto }>(
+      jsonRequest(
         `/api/internal/links/${encodeURIComponent(linkId)}/${command}`,
+        linkMutationResponseSchema,
         {
           method: "POST",
           csrfToken: session.csrfToken,
@@ -1221,8 +1227,9 @@ function LinkDetailPanel() {
                   onSession={onSession}
                   onClose={() => setDeleting(false)}
                   execute={(csrfToken) =>
-                    apiRequest<{ ok: true; reservedAlias: ReservedAliasDto }>(
+                    jsonRequest(
                       `/api/internal/links/${encodeURIComponent(linkId)}/permanently-delete`,
+                      deletedLinkResponseSchema,
                       {
                         method: "POST",
                         csrfToken,
@@ -1288,8 +1295,9 @@ function SensitiveAliasDialog({
     if (needsReauthentication) {
       setPending(true);
       try {
-        const refreshed = await apiRequest<{ ok: true; user: Session["user"]; csrfToken: string }>(
+        const refreshed = await jsonRequest(
           "/api/internal/auth/reauthenticate",
+          sessionResponseSchema,
           {
             method: "POST",
             csrfToken,
@@ -1407,11 +1415,15 @@ function LinkRow({ link }: Readonly<{ link: LinkDto }>) {
 
   const stateChange = useMutation({
     mutationFn: (command: "activate" | "disable" | "archive" | "restore") =>
-      apiRequest(`/api/internal/links/${encodeURIComponent(link.id)}/${command}`, {
-        method: "POST",
-        csrfToken: session.csrfToken,
-        body: { expectedRevision: link.revision },
-      }),
+      jsonRequest(
+        `/api/internal/links/${encodeURIComponent(link.id)}/${command}`,
+        linkMutationResponseSchema,
+        {
+          method: "POST",
+          csrfToken: session.csrfToken,
+          body: { expectedRevision: link.revision },
+        },
+      ),
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["links"] });
     },
