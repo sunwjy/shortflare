@@ -1,0 +1,43 @@
+.dialog-backdrop {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  background: rgb(20 18 16 / 55%);
+}
+
+.dialog-viewport {
+  position: fixed;
+  z-index: 41;
+  inset: 0;
+  display: grid;
+  padding: 1rem;
+  place-items: center;
+}
+
+.dialog-popup {
+  position: relative;
+  width: min(30rem, 100%);
+  padding: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 1.5rem 5rem rgb(20 18 16 / 28%);
+}
+
+.dialog-popup {
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog-popup > .dialog-close {
+  order: 2;
+}
+
+.dialog-popup > p {
+  color: var(--ink-muted);
+}
+
+.dialog-close {
+  margin-top: 0.75rem;
+}
