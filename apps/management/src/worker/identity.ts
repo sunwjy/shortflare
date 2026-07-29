@@ -11,9 +11,12 @@ import { createD1PasswordResetPersistence } from "./identity/d1-password-resets"
 import { createPasswordResets } from "./identity/password-resets";
 import { createD1OperatorRecoveryPersistence } from "./identity/d1-operator-recovery";
 import { createOperatorRecovery } from "./identity/operator-recovery";
+import { createD1InitialSetupPersistence } from "./identity/d1-initial-setup";
+import { createInitialSetup } from "./identity/initial-setup";
 
 export type { User, UserRole, UserState } from "./identity/shared";
 
+type PasswordFailure = Readonly<{ ok: false; kind: "invalid-password" }>;
 type IdentityOptions = Readonly<{
   db: D1Database;
   now?: () => Date;
@@ -21,19 +24,6 @@ type IdentityOptions = Readonly<{
   randomToken?: () => string;
 }>;
 
-type InitialSetupInput = Readonly<{
-  displayEmail: string;
-  token: string;
-  expiresAt: Date;
-}>;
-
-type CompleteInitialSetupInput = Readonly<{
-  token: string;
-  password: string;
-}>;
-
-type TokenFailure = Readonly<{ ok: false; kind: "invalid-or-expired-token" }>;
-type PasswordFailure = Readonly<{ ok: false; kind: "invalid-password" }>;
 type UserResult = Readonly<{ ok: true; kind: "user"; user: User }>;
 type RequestUserResult = Readonly<{
   ok: true;
@@ -92,151 +82,15 @@ export function createIdentity(options: IdentityOptions) {
     now,
     randomId,
   });
+  const initialSetup = createInitialSetup(createD1InitialSetupPersistence(options.db), {
+    now,
+    randomId,
+  });
 
   return {
-    async writeInitialSetup(input: InitialSetupInput): Promise<void> {
-      const email = parseUserEmail(input.displayEmail);
-      if (!email) {
-        throw new Error("Invalid initial Administrator email");
-      }
-      const setupAvailability = await options.db
-        .prepare(
-          `SELECT
-             instances.setup_completed_at AS setupCompletedAt,
-             EXISTS (
-               SELECT 1 FROM users
-               WHERE state = 'active' AND role = 'administrator'
-             ) AS hasActiveAdministrator
-           FROM instances WHERE singleton_key = 1`,
-        )
-        .first<{ setupCompletedAt: number | null; hasActiveAdministrator: number }>();
-      if (
-        !setupAvailability ||
-        setupAvailability.setupCompletedAt !== null ||
-        setupAvailability.hasActiveAdministrator === 1
-      ) {
-        throw new Error("Initial setup is permanently closed");
-      }
-      const occurredAt = now().getTime();
-      const tokenHash = await hashToken(input.token);
+    writeInitialSetup: initialSetup.writeInitialSetup,
 
-      await options.db.batch([
-        options.db.prepare(
-          `DELETE FROM initial_setup
-             WHERE singleton_key = 1
-               AND EXISTS (
-                 SELECT 1 FROM instances
-                 WHERE singleton_key = 1 AND setup_completed_at IS NULL
-               )
-               AND NOT EXISTS (
-                 SELECT 1 FROM users
-                 WHERE state = 'active' AND role = 'administrator'
-               )`,
-        ),
-        options.db
-          .prepare(
-            `INSERT INTO initial_setup
-               (singleton_key, display_email, normalized_email, token_hash, created_at, expires_at)
-             SELECT 1, ?, ?, ?, ?, ?
-             WHERE EXISTS (
-               SELECT 1 FROM instances
-               WHERE singleton_key = 1 AND setup_completed_at IS NULL
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM users
-               WHERE state = 'active' AND role = 'administrator'
-             )`,
-          )
-          .bind(email.display, email.normalized, tokenHash, occurredAt, input.expiresAt.getTime()),
-      ]);
-    },
-
-    async completeInitialSetup(
-      input: CompleteInitialSetupInput,
-    ): Promise<TokenFailure | PasswordFailure | UserResult> {
-      const occurredAt = now().getTime();
-      const tokenHash = await hashToken(input.token);
-      const setup = await options.db
-        .prepare(
-          `SELECT display_email AS displayEmail, normalized_email AS normalizedEmail
-           FROM initial_setup
-           WHERE singleton_key = 1 AND token_hash = ? AND expires_at > ?`,
-        )
-        .bind(tokenHash, occurredAt)
-        .first<{ displayEmail: string; normalizedEmail: string }>();
-      if (!setup) {
-        return { ok: false, kind: "invalid-or-expired-token" };
-      }
-
-      const verifier = await createPasswordVerifier(input.password);
-      if (!verifier) {
-        return { ok: false, kind: "invalid-password" };
-      }
-
-      const userId = randomId();
-      const auditId = randomId();
-      try {
-        await options.db.batch([
-          options.db
-            .prepare(
-              `DELETE FROM initial_setup
-               WHERE singleton_key = 1 AND token_hash = ? AND expires_at > ?`,
-            )
-            .bind(tokenHash, occurredAt),
-          options.db
-            .prepare(
-              `INSERT INTO users
-                 (id, display_email, normalized_email, state, role, activated_at, created_at, updated_at)
-               VALUES (?, ?, ?, 'active', 'administrator', ?, ?, ?)`,
-            )
-            .bind(
-              userId,
-              setup.displayEmail,
-              setup.normalizedEmail,
-              occurredAt,
-              occurredAt,
-              occurredAt,
-            ),
-          options.db
-            .prepare(
-              `INSERT INTO credentials (user_id, verifier, updated_at)
-               VALUES (?, ?, ?)`,
-            )
-            .bind(userId, verifier, occurredAt),
-          options.db
-            .prepare(
-              `UPDATE instances SET setup_completed_at = ?
-               WHERE singleton_key = 1 AND setup_completed_at IS NULL`,
-            )
-            .bind(occurredAt),
-          options.db
-            .prepare(
-              `INSERT INTO audit_events
-                 (id, actor_id, action, subject_id, occurred_at, metadata)
-               VALUES (?, 'system', 'initial-administrator-activate', ?, ?, ?)`,
-            )
-            .bind(
-              auditId,
-              userId,
-              occurredAt,
-              JSON.stringify({ toRole: "administrator", toUserState: "active" }),
-            ),
-        ]);
-      } catch {
-        return { ok: false, kind: "invalid-or-expired-token" };
-      }
-
-      return {
-        ok: true,
-        kind: "user",
-        user: {
-          id: userId,
-          email: setup.displayEmail,
-          role: "administrator",
-          state: "active",
-        },
-      };
-    },
+    completeInitialSetup: initialSetup.completeInitialSetup,
 
     async login(
       input: Readonly<{ email: string; password: string }>,
