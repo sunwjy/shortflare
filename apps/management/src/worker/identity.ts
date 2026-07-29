@@ -9,10 +9,11 @@ import {
   parseUserEmail,
   toUser,
   type User,
-  type UserRole,
 } from "./identity/shared";
 import { createD1InvitationPersistence } from "./identity/d1-invitations";
 import { createInvitations } from "./identity/invitations";
+import { createD1UserPersistence } from "./identity/d1-users";
+import { createUsers } from "./identity/users";
 
 export type { User, UserRole, UserState } from "./identity/shared";
 
@@ -95,6 +96,7 @@ export function createIdentity(options: IdentityOptions) {
     randomId,
     randomToken,
   });
+  const users = createUsers(createD1UserPersistence(options.db), { now, randomId });
 
   return {
     async writeInitialSetup(input: InitialSetupInput): Promise<void> {
@@ -440,232 +442,19 @@ export function createIdentity(options: IdentityOptions) {
 
     issueInvitation: invitations.issueInvitation,
 
-    async listUsers(): Promise<readonly User[]> {
-      const result = await options.db
-        .prepare(
-          `SELECT id, display_email AS email, role, state
-           FROM users
-           ORDER BY created_at, id`,
-        )
-        .all<User>();
-      return result.results.map(toUser);
-    },
+    listUsers: users.listUsers,
 
-    async getUser(userId: string): Promise<User | undefined> {
-      const user = await findUser(options.db, userId);
-      return user ? toUser(user) : undefined;
-    },
+    getUser: users.getUser,
 
     acceptInvitation: invitations.acceptInvitation,
 
     cancelInvitation: invitations.cancelInvitation,
 
-    async changeRole(
-      input: Readonly<{
-        actorId: string;
-        userId: string;
-        role: UserRole;
-        recentlyAuthenticated: boolean;
-      }>,
-    ): Promise<
-      | Readonly<{ ok: true; kind: "role-changed" | "unchanged" }>
-      | Readonly<{
-          ok: false;
-          kind: "user-not-found" | "last-active-administrator" | "reauthentication-required";
-        }>
-    > {
-      const stored = await findUser(options.db, input.userId);
-      if (!stored || stored.state === "invited") {
-        return { ok: false, kind: "user-not-found" };
-      }
-      if (stored.role === input.role) {
-        return { ok: true, kind: "unchanged" };
-      }
+    changeRole: users.changeRole,
 
-      const occurredAt = now().getTime();
-      const guard = `id = ? AND role = ? AND state IN ('active', 'suspended')
-        AND (
-          ? = 1
-          OR (? != 'administrator' AND role != 'administrator')
-        )
-        AND NOT (
-          state = 'active'
-          AND role = 'administrator'
-          AND ? != 'administrator'
-          AND (
-            SELECT COUNT(*) FROM users
-            WHERE state = 'active' AND role = 'administrator'
-          ) = 1
-        )`;
-      const metadata = JSON.stringify({ fromRole: stored.role, toRole: input.role });
-      const results = await options.db.batch([
-        options.db
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, ?, 'role-change', id, ?, ?
-             FROM users WHERE ${guard}`,
-          )
-          .bind(
-            randomId(),
-            input.actorId,
-            occurredAt,
-            metadata,
-            input.userId,
-            stored.role,
-            input.recentlyAuthenticated ? 1 : 0,
-            input.role,
-            input.role,
-          ),
-        options.db
-          .prepare(`UPDATE users SET role = ?, updated_at = ? WHERE ${guard}`)
-          .bind(
-            input.role,
-            occurredAt,
-            input.userId,
-            stored.role,
-            input.recentlyAuthenticated ? 1 : 0,
-            input.role,
-            input.role,
-          ),
-        options.db
-          .prepare(
-            `DELETE FROM sessions
-             WHERE user_id = ?
-               AND EXISTS (SELECT 1 FROM users WHERE id = ? AND role = ?)`,
-          )
-          .bind(input.userId, input.userId, input.role),
-      ]);
-      if ((results[1]?.meta.changes ?? 0) > 0) {
-        return { ok: true, kind: "role-changed" };
-      }
-      const current = await findUser(options.db, input.userId);
-      if (
-        !input.recentlyAuthenticated &&
-        (input.role === "administrator" || current?.role === "administrator")
-      ) {
-        return { ok: false, kind: "reauthentication-required" };
-      }
-      return {
-        ok: false,
-        kind:
-          stored.state === "active" && stored.role === "administrator"
-            ? "last-active-administrator"
-            : "user-not-found",
-      };
-    },
+    suspendUser: users.suspendUser,
 
-    async suspendUser(
-      input: Readonly<{
-        actorId: string;
-        userId: string;
-        recentlyAuthenticated: boolean;
-      }>,
-    ): Promise<
-      | Readonly<{ ok: true; kind: "user-suspended" }>
-      | Readonly<{
-          ok: false;
-          kind: "user-not-found" | "last-active-administrator" | "reauthentication-required";
-        }>
-    > {
-      const stored = await findUser(options.db, input.userId);
-      if (!stored || stored.state !== "active") {
-        return { ok: false, kind: "user-not-found" };
-      }
-      const occurredAt = now().getTime();
-      const guard = `id = ? AND state = 'active'
-        AND (? = 1 OR role != 'administrator')
-        AND NOT (
-          role = 'administrator'
-          AND (
-            SELECT COUNT(*) FROM users
-            WHERE state = 'active' AND role = 'administrator'
-          ) = 1
-        )`;
-      const metadata = JSON.stringify({
-        fromUserState: "active",
-        toUserState: "suspended",
-      });
-      const results = await options.db.batch([
-        options.db
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, ?, 'user-suspend', id, ?, ?
-             FROM users WHERE ${guard}`,
-          )
-          .bind(
-            randomId(),
-            input.actorId,
-            occurredAt,
-            metadata,
-            input.userId,
-            input.recentlyAuthenticated ? 1 : 0,
-          ),
-        options.db
-          .prepare(`UPDATE users SET state = 'suspended', updated_at = ? WHERE ${guard}`)
-          .bind(occurredAt, input.userId, input.recentlyAuthenticated ? 1 : 0),
-        options.db
-          .prepare(
-            `DELETE FROM sessions
-             WHERE user_id = ?
-               AND EXISTS (SELECT 1 FROM users WHERE id = ? AND state = 'suspended')`,
-          )
-          .bind(input.userId, input.userId),
-      ]);
-      if ((results[1]?.meta.changes ?? 0) > 0) {
-        return { ok: true, kind: "user-suspended" };
-      }
-      const current = await findUser(options.db, input.userId);
-      if (!input.recentlyAuthenticated && current?.role === "administrator") {
-        return { ok: false, kind: "reauthentication-required" };
-      }
-      return {
-        ok: false,
-        kind: stored.role === "administrator" ? "last-active-administrator" : "user-not-found",
-      };
-    },
-
-    async reactivateUser(
-      input: Readonly<{ actorId: string; userId: string }>,
-    ): Promise<
-      | Readonly<{ ok: true; kind: "user-reactivated"; user: User }>
-      | Readonly<{ ok: false; kind: "user-not-found" }>
-    > {
-      const stored = await findUser(options.db, input.userId);
-      if (!stored || stored.state !== "suspended") {
-        return { ok: false, kind: "user-not-found" };
-      }
-      const occurredAt = now().getTime();
-      const metadata = JSON.stringify({
-        fromUserState: "suspended",
-        toUserState: "active",
-      });
-      const results = await options.db.batch([
-        options.db
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, ?, 'user-reactivate', id, ?, ?
-             FROM users WHERE id = ? AND state = 'suspended'`,
-          )
-          .bind(randomId(), input.actorId, occurredAt, metadata, input.userId),
-        options.db
-          .prepare(
-            `UPDATE users SET state = 'active', updated_at = ?
-             WHERE id = ? AND state = 'suspended'`,
-          )
-          .bind(occurredAt, input.userId),
-      ]);
-      if ((results[1]?.meta.changes ?? 0) === 0) {
-        return { ok: false, kind: "user-not-found" };
-      }
-      return {
-        ok: true,
-        kind: "user-reactivated",
-        user: { ...stored, state: "active" },
-      };
-    },
+    reactivateUser: users.reactivateUser,
 
     async issuePasswordReset(
       input: Readonly<{ actorId: string; userId: string }>,
