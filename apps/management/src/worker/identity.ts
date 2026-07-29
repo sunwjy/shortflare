@@ -2,16 +2,19 @@ import { Buffer } from "node:buffer";
 import { timingSafeEqual } from "node:crypto";
 
 import { createPasswordVerifier, dummyVerifier, verifyPassword } from "./passwords";
+import {
+  createRandomToken,
+  findUser,
+  hashToken,
+  parseUserEmail,
+  toUser,
+  type User,
+  type UserRole,
+} from "./identity/shared";
+import { createD1InvitationPersistence } from "./identity/d1-invitations";
+import { createInvitations } from "./identity/invitations";
 
-export type UserRole = "administrator" | "member" | "viewer";
-export type UserState = "invited" | "active" | "suspended";
-
-export type User = Readonly<{
-  id: string;
-  email: string;
-  role: UserRole;
-  state: UserState;
-}>;
+export type { User, UserRole, UserState } from "./identity/shared";
 
 type IdentityOptions = Readonly<{
   db: D1Database;
@@ -56,19 +59,6 @@ type SessionResult = Readonly<{
     user: User;
   }>;
 }>;
-type InvitationResult = Readonly<{
-  ok: true;
-  kind: "invitation";
-  invitation: Readonly<{
-    user: User;
-    token: string;
-    expiresAt: Date;
-  }>;
-}>;
-type UserConflict = Readonly<{
-  ok: false;
-  kind: "invalid-email" | "user-active" | "user-suspended";
-}>;
 type PasswordResetResult = Readonly<{
   ok: true;
   kind: "password-reset";
@@ -81,7 +71,6 @@ type PasswordResetResult = Readonly<{
 
 const idleSessionDuration = 7 * 24 * 60 * 60 * 1_000;
 const absoluteSessionDuration = 30 * 24 * 60 * 60 * 1_000;
-const invitationDuration = 24 * 60 * 60 * 1_000;
 const passwordResetDuration = 30 * 60 * 1_000;
 const recentAuthenticationDuration = 10 * 60 * 1_000;
 
@@ -100,6 +89,12 @@ export function createIdentity(options: IdentityOptions) {
   const now = options.now ?? (() => new Date());
   const randomId = options.randomId ?? (() => crypto.randomUUID());
   const randomToken = options.randomToken ?? createRandomToken;
+  const invitations = createInvitations({
+    persistence: createD1InvitationPersistence(options.db),
+    now,
+    randomId,
+    randomToken,
+  });
 
   return {
     async writeInitialSetup(input: InitialSetupInput): Promise<void> {
@@ -443,96 +438,7 @@ export function createIdentity(options: IdentityOptions) {
       };
     },
 
-    async issueInvitation(
-      input: Readonly<{ actorId: string; email: string; role: UserRole }>,
-    ): Promise<UserConflict | InvitationResult> {
-      const email = parseUserEmail(input.email);
-      if (!email) {
-        return { ok: false, kind: "invalid-email" };
-      }
-      const existing = await options.db
-        .prepare(
-          `SELECT id, display_email AS email, role, state
-           FROM users WHERE normalized_email = ?`,
-        )
-        .bind(email.normalized)
-        .first<User>();
-      if (existing?.state === "active") {
-        return { ok: false, kind: "user-active" };
-      }
-      if (existing?.state === "suspended") {
-        return { ok: false, kind: "user-suspended" };
-      }
-
-      const occurredAt = now().getTime();
-      const expiresAt = new Date(occurredAt + invitationDuration);
-      const userId = existing?.id ?? randomId();
-      const invitationId = randomId();
-      const auditId = randomId();
-      const token = randomToken();
-      const statements = [
-        existing
-          ? options.db
-              .prepare(
-                `UPDATE users
-                 SET display_email = ?, role = ?, updated_at = ?
-                 WHERE id = ? AND state = 'invited'`,
-              )
-              .bind(email.display, input.role, occurredAt, userId)
-          : options.db
-              .prepare(
-                `INSERT INTO users
-                   (id, display_email, normalized_email, state, role, activated_at, created_at, updated_at)
-                 VALUES (?, ?, ?, 'invited', ?, NULL, ?, ?)`,
-              )
-              .bind(userId, email.display, email.normalized, input.role, occurredAt, occurredAt),
-        options.db.prepare("DELETE FROM invitations WHERE user_id = ?").bind(userId),
-        options.db
-          .prepare(
-            `INSERT INTO invitations (id, user_id, token_hash, issued_at, expires_at)
-             VALUES (?, ?, ?, ?, ?)`,
-          )
-          .bind(invitationId, userId, await hashToken(token), occurredAt, expiresAt.getTime()),
-        options.db
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(
-            auditId,
-            input.actorId,
-            existing ? "invitation-reissue" : "invitation-issue",
-            userId,
-            occurredAt,
-            JSON.stringify({
-              ...(existing ? { fromRole: existing.role } : {}),
-              toRole: input.role,
-              toUserState: "invited",
-            }),
-          ),
-      ];
-      try {
-        await options.db.batch(statements);
-      } catch {
-        return { ok: false, kind: "user-active" };
-      }
-
-      return {
-        ok: true,
-        kind: "invitation",
-        invitation: {
-          user: {
-            id: userId,
-            email: email.display,
-            role: input.role,
-            state: "invited",
-          },
-          token,
-          expiresAt,
-        },
-      };
-    },
+    issueInvitation: invitations.issueInvitation,
 
     async listUsers(): Promise<readonly User[]> {
       const result = await options.db
@@ -550,104 +456,9 @@ export function createIdentity(options: IdentityOptions) {
       return user ? toUser(user) : undefined;
     },
 
-    async acceptInvitation(
-      input: Readonly<{ token: string; password: string }>,
-    ): Promise<TokenFailure | PasswordFailure | UserResult> {
-      const occurredAt = now().getTime();
-      const tokenHash = await hashToken(input.token);
-      const invited = await options.db
-        .prepare(
-          `SELECT users.id, users.display_email AS email, users.role, users.state
-           FROM invitations
-           INNER JOIN users ON users.id = invitations.user_id
-           WHERE invitations.token_hash = ?
-             AND invitations.expires_at > ?
-             AND users.state = 'invited'`,
-        )
-        .bind(tokenHash, occurredAt)
-        .first<User>();
-      if (!invited) {
-        return { ok: false, kind: "invalid-or-expired-token" };
-      }
-      const verifier = await createPasswordVerifier(input.password);
-      if (!verifier) {
-        return { ok: false, kind: "invalid-password" };
-      }
+    acceptInvitation: invitations.acceptInvitation,
 
-      try {
-        await options.db.batch([
-          options.db
-            .prepare("DELETE FROM invitations WHERE user_id = ? AND token_hash = ?")
-            .bind(invited.id, tokenHash),
-          options.db
-            .prepare(
-              `INSERT INTO credentials (user_id, verifier, updated_at)
-               VALUES (?, ?, ?)`,
-            )
-            .bind(invited.id, verifier, occurredAt),
-          options.db
-            .prepare(
-              `UPDATE users
-               SET state = 'active', activated_at = ?, updated_at = ?
-               WHERE id = ? AND state = 'invited'`,
-            )
-            .bind(occurredAt, occurredAt, invited.id),
-          options.db
-            .prepare(
-              `INSERT INTO audit_events
-                 (id, actor_id, action, subject_id, occurred_at, metadata)
-               VALUES (?, ?, 'invitation-accept', ?, ?, ?)`,
-            )
-            .bind(
-              randomId(),
-              invited.id,
-              invited.id,
-              occurredAt,
-              JSON.stringify({ fromUserState: "invited", toUserState: "active" }),
-            ),
-        ]);
-      } catch {
-        return { ok: false, kind: "invalid-or-expired-token" };
-      }
-
-      return {
-        ok: true,
-        kind: "user",
-        user: { ...toUser(invited), state: "active" },
-      };
-    },
-
-    async cancelInvitation(
-      input: Readonly<{ actorId: string; userId: string }>,
-    ): Promise<
-      | Readonly<{ ok: true; kind: "invitation-cancelled" }>
-      | Readonly<{ ok: false; kind: "invitation-not-found" }>
-    > {
-      const occurredAt = now().getTime();
-      const results = await options.db.batch([
-        options.db
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, ?, 'invitation-cancel', id, ?, ?
-             FROM users
-             WHERE id = ? AND state = 'invited'`,
-          )
-          .bind(
-            randomId(),
-            input.actorId,
-            occurredAt,
-            JSON.stringify({ fromUserState: "invited" }),
-            input.userId,
-          ),
-        options.db
-          .prepare("DELETE FROM users WHERE id = ? AND state = 'invited'")
-          .bind(input.userId),
-      ]);
-      return (results[1]?.meta.changes ?? 0) > 0
-        ? { ok: true, kind: "invitation-cancelled" }
-        : { ok: false, kind: "invitation-not-found" };
-    },
+    cancelInvitation: invitations.cancelInvitation,
 
     async changeRole(
       input: Readonly<{
@@ -1183,56 +994,4 @@ export function createIdentity(options: IdentityOptions) {
       return { ok: true, kind: "operator-recovery", user };
     },
   };
-}
-
-function parseUserEmail(value: string) {
-  const display = value.trim();
-  const at = display.indexOf("@");
-  const localPart = at >= 0 ? display.slice(0, at) : "";
-  const domain = at >= 0 ? display.slice(at + 1) : "";
-  if (
-    display.length < 3 ||
-    display.length > 254 ||
-    at !== display.lastIndexOf("@") ||
-    localPart.length < 1 ||
-    localPart.length > 64 ||
-    localPart.startsWith(".") ||
-    localPart.endsWith(".") ||
-    localPart.includes("..") ||
-    !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(localPart) ||
-    !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.test(
-      domain,
-    )
-  ) {
-    return undefined;
-  }
-  return { display, normalized: display.toLowerCase() };
-}
-
-async function hashToken(token: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function createRandomToken() {
-  return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
-}
-
-function toUser(record: User): User {
-  return {
-    id: record.id,
-    email: record.email,
-    role: record.role,
-    state: record.state,
-  };
-}
-
-async function findUser(db: D1Database, userId: string) {
-  return db
-    .prepare(
-      `SELECT id, display_email AS email, role, state
-       FROM users WHERE id = ?`,
-    )
-    .bind(userId)
-    .first<User>();
 }
