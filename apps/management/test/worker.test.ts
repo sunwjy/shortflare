@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { buildSequentialFixtures } from "../../../test/support/sequential-fixtures";
 import { app } from "../src/worker/index";
 import { createIdentity } from "../src/worker/identity";
 
@@ -699,26 +700,27 @@ describe("management worker", () => {
       ["activate", 3, "active", 4],
     ] as const;
 
-    for (const [command, expectedRevision, state, revision] of commands) {
-      // Each transition consumes the revision returned by the prior command.
-      // oxlint-disable-next-line no-await-in-loop -- Each transition consumes the revision produced by the previous request.
-      const response = await app.request(
-        `https://management.test/api/internal/links/${created.link.id}/${command}`,
-        {
-          method: "POST",
-          headers: authenticatedHeaders(authentication),
-          body: JSON.stringify({ expectedRevision }),
-        },
-        env,
-      );
-      expect(response.status).toBe(200);
-      // oxlint-disable-next-line no-await-in-loop -- The response belongs to the sequential transition immediately above.
-      await expect(response.json()).resolves.toEqual({
-        ok: true,
-        changed: true,
-        link: expect.objectContaining({ state, revision }),
-      });
-    }
+    await buildSequentialFixtures(
+      commands,
+      async ([command, expectedRevision, state, revision]) => {
+        const response = await app.request(
+          `https://management.test/api/internal/links/${created.link.id}/${command}`,
+          {
+            method: "POST",
+            headers: authenticatedHeaders(authentication),
+            body: JSON.stringify({ expectedRevision }),
+          },
+          env,
+        );
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+          ok: true,
+          changed: true,
+          link: expect.objectContaining({ state, revision }),
+        });
+        return response;
+      },
+    );
   });
 
   it("pages Destination Version history newest first for an Archived Link", async () => {
@@ -737,22 +739,22 @@ describe("management worker", () => {
       env,
     );
     const created = (await createResponse.json()) as { link: { id: string } };
-    for (const [expectedRevision, destination] of [
-      [0, "https://example.com/v2"],
-      [1, "https://example.com/v3"],
-    ] as const) {
-      // Sequential edits create deterministic Destination Version numbers.
-      // oxlint-disable-next-line no-await-in-loop -- Each edit consumes the revision produced by the previous edit.
-      await app.request(
-        `https://management.test/api/internal/links/${created.link.id}`,
-        {
-          method: "PATCH",
-          headers: authenticatedHeaders(authentication),
-          body: JSON.stringify({ expectedRevision, destination }),
-        },
-        env,
-      );
-    }
+    await buildSequentialFixtures(
+      [
+        [0, "https://example.com/v2"],
+        [1, "https://example.com/v3"],
+      ] as const,
+      async ([expectedRevision, destination]) =>
+        await app.request(
+          `https://management.test/api/internal/links/${created.link.id}`,
+          {
+            method: "PATCH",
+            headers: authenticatedHeaders(authentication),
+            body: JSON.stringify({ expectedRevision, destination }),
+          },
+          env,
+        ),
+    );
     await app.request(
       `https://management.test/api/internal/links/${created.link.id}/archive`,
       {

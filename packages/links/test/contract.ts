@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { buildSequentialFixtures } from "../../../test/support/sequential-fixtures";
 import type { CreateLinksOptions } from "../src/persistence";
 import type { Links } from "../src/index";
 
@@ -703,33 +704,33 @@ export function linksContract(createTestLinks: LinksContractFactory) {
 
     it("rejects a Destination Version cursor reused for another Link", async () => {
       const links = createTestLinks();
-      const createdLinks = [];
-      for (const alias of ["FirstHistory", "SecondHistory"]) {
-        // oxlint-disable-next-line no-await-in-loop -- Each fixture write must finish before its dependent edit.
-        const created = await links.execute(
-          {
-            kind: "create",
-            alias,
-            destination: `https://example.com/${alias.toLowerCase()}/v1`,
-            title: alias,
-          },
-          actor,
-        );
-        if (!created.ok || created.kind !== "link") {
-          throw new Error("expected Link creation to succeed");
-        }
-        // oxlint-disable-next-line no-await-in-loop -- This edit depends on the Link created immediately above.
-        await links.execute(
-          {
-            kind: "edit",
-            linkId: created.link.id,
-            expectedRevision: 0,
-            destination: `https://example.com/${alias.toLowerCase()}/v2`,
-          },
-          actor,
-        );
-        createdLinks.push(created.link);
-      }
+      const createdLinks = await buildSequentialFixtures(
+        ["FirstHistory", "SecondHistory"],
+        async (alias) => {
+          const created = await links.execute(
+            {
+              kind: "create",
+              alias,
+              destination: `https://example.com/${alias.toLowerCase()}/v1`,
+              title: alias,
+            },
+            actor,
+          );
+          if (!created.ok || created.kind !== "link") {
+            throw new Error("expected Link creation to succeed");
+          }
+          await links.execute(
+            {
+              kind: "edit",
+              linkId: created.link.id,
+              expectedRevision: 0,
+              destination: `https://example.com/${alias.toLowerCase()}/v2`,
+            },
+            actor,
+          );
+          return created.link;
+        },
+      );
 
       const first = await links.query(
         { kind: "destination-versions", linkId: createdLinks[0]!.id, limit: 1 },
@@ -758,8 +759,7 @@ export function linksContract(createTestLinks: LinksContractFactory) {
 
     it("pages Reserved Aliases and binds the cursor to the search", async () => {
       const links = createTestLinks();
-      for (const alias of ["alphaReserved", "BetaReserved"]) {
-        // oxlint-disable-next-line no-await-in-loop -- Reserved Alias fixtures intentionally share deterministic write order.
+      await buildSequentialFixtures(["alphaReserved", "BetaReserved"], async (alias) => {
         const created = await links.execute(
           {
             kind: "create",
@@ -772,12 +772,10 @@ export function linksContract(createTestLinks: LinksContractFactory) {
         if (!created.ok || created.kind !== "link") {
           throw new Error("expected Link creation to succeed");
         }
-        // oxlint-disable-next-line no-await-in-loop -- Archival consumes the revision from the preceding creation.
         await links.execute(
           { kind: "archive", linkId: created.link.id, expectedRevision: 0 },
           actor,
         );
-        // oxlint-disable-next-line no-await-in-loop -- Deletion consumes the revision from the preceding archival.
         await links.execute(
           {
             kind: "permanently-delete",
@@ -787,7 +785,8 @@ export function linksContract(createTestLinks: LinksContractFactory) {
           },
           actor,
         );
-      }
+        return created.link;
+      });
 
       const first = await links.query(
         { kind: "reserved-aliases", search: "reserved", limit: 1 },
@@ -899,10 +898,8 @@ export function linksContract(createTestLinks: LinksContractFactory) {
 
     it("rejects a Link cursor reused with another search", async () => {
       const links = createTestLinks();
-      for (const alias of ["DocsOne", "DocsTwo"]) {
-        // Sequential creation gives the page a deterministic ID tie-break.
-        // oxlint-disable-next-line no-await-in-loop -- Sequential creation establishes the pagination tie-break order.
-        await links.execute(
+      await buildSequentialFixtures(["DocsOne", "DocsTwo"], (alias) =>
+        links.execute(
           {
             kind: "create",
             alias,
@@ -910,8 +907,8 @@ export function linksContract(createTestLinks: LinksContractFactory) {
             title: alias,
           },
           actor,
-        );
-      }
+        ),
+      );
       const first = await links.query({ kind: "list", search: "docs", limit: 1 }, actor);
       if (!first.ok || first.kind !== "page" || first.page.nextCursor === null) {
         throw new Error("expected a paginated Link page");
@@ -928,25 +925,25 @@ export function linksContract(createTestLinks: LinksContractFactory) {
     it("keeps Link pagination ordered by immutable creation time after an edit", async () => {
       let clock = new Date("2026-07-21T00:00:00.000Z");
       const links = createTestLinks({ now: () => clock });
-      const created = [];
-      for (const [index, alias] of ["First", "Second", "Third"].entries()) {
-        clock = new Date(`2026-07-${21 + index}T00:00:00.000Z`);
-        // Sequential writes establish the intended creation order.
-        // oxlint-disable-next-line no-await-in-loop -- Sequential writes establish immutable creation order for this clock.
-        const result = await links.execute(
-          {
-            kind: "create",
-            alias,
-            destination: `https://example.com/${alias.toLowerCase()}`,
-            title: alias,
-          },
-          actor,
-        );
-        if (!result.ok || result.kind !== "link") {
-          throw new Error("expected Link creation to succeed");
-        }
-        created.push(result.link);
-      }
+      const created = await buildSequentialFixtures(
+        ["First", "Second", "Third"],
+        async (alias, index) => {
+          clock = new Date(`2026-07-${21 + index}T00:00:00.000Z`);
+          const result = await links.execute(
+            {
+              kind: "create",
+              alias,
+              destination: `https://example.com/${alias.toLowerCase()}`,
+              title: alias,
+            },
+            actor,
+          );
+          if (!result.ok || result.kind !== "link") {
+            throw new Error("expected Link creation to succeed");
+          }
+          return result.link;
+        },
+      );
 
       clock = new Date("2026-07-24T00:00:00.000Z");
       await links.execute(
@@ -971,25 +968,24 @@ export function linksContract(createTestLinks: LinksContractFactory) {
 
     it("continues keyset pagination after the cursor Link is deleted", async () => {
       const links = createTestLinks();
-      const createdLinks = [];
-      for (const alias of ["First", "Second", "Third"]) {
-        // These writes are intentionally sequential so their generated IDs
-        // define the expected tie-break order for the fixed test timestamp.
-        // oxlint-disable-next-line no-await-in-loop -- Fixed timestamps require sequential IDs for deterministic pagination.
-        const created = await links.execute(
-          {
-            kind: "create",
-            alias,
-            destination: `https://example.com/${alias.toLowerCase()}`,
-            title: alias,
-          },
-          actor,
-        );
-        if (!created.ok || created.kind !== "link") {
-          throw new Error("expected Link creation to succeed");
-        }
-        createdLinks.push(created.link);
-      }
+      const createdLinks = await buildSequentialFixtures(
+        ["First", "Second", "Third"],
+        async (alias) => {
+          const created = await links.execute(
+            {
+              kind: "create",
+              alias,
+              destination: `https://example.com/${alias.toLowerCase()}`,
+              title: alias,
+            },
+            actor,
+          );
+          if (!created.ok || created.kind !== "link") {
+            throw new Error("expected Link creation to succeed");
+          }
+          return created.link;
+        },
+      );
 
       const firstPage = await links.query({ kind: "list", limit: 2 }, actor);
       if (!firstPage.ok || firstPage.kind !== "page" || firstPage.page.nextCursor === null) {
