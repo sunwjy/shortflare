@@ -260,11 +260,16 @@ describe("redirect worker", () => {
   });
 
   it("returns a non-cacheable service error when D1 resolution fails", async () => {
-    const failingDatabase = {
-      prepare() {
-        throw new Error("database unavailable");
+    const failingDatabase: D1Database = new Proxy(env.DB, {
+      get(target, property, receiver) {
+        if (property === "prepare") {
+          return () => {
+            throw new Error("database unavailable");
+          };
+        }
+        return Reflect.get(target, property, receiver);
       },
-    } as unknown as D1Database;
+    });
 
     const response = await app.request(
       "http://short.test/Unavailable",
