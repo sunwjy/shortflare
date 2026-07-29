@@ -2,18 +2,13 @@ import { Buffer } from "node:buffer";
 import { timingSafeEqual } from "node:crypto";
 
 import { createPasswordVerifier, dummyVerifier, verifyPassword } from "./passwords";
-import {
-  createRandomToken,
-  findUser,
-  hashToken,
-  parseUserEmail,
-  toUser,
-  type User,
-} from "./identity/shared";
+import { createRandomToken, hashToken, parseUserEmail, toUser, type User } from "./identity/shared";
 import { createD1InvitationPersistence } from "./identity/d1-invitations";
 import { createInvitations } from "./identity/invitations";
 import { createD1UserPersistence } from "./identity/d1-users";
 import { createUsers } from "./identity/users";
+import { createD1PasswordResetPersistence } from "./identity/d1-password-resets";
+import { createPasswordResets } from "./identity/password-resets";
 
 export type { User, UserRole, UserState } from "./identity/shared";
 
@@ -60,19 +55,8 @@ type SessionResult = Readonly<{
     user: User;
   }>;
 }>;
-type PasswordResetResult = Readonly<{
-  ok: true;
-  kind: "password-reset";
-  passwordReset: Readonly<{
-    user: User;
-    token: string;
-    expiresAt: Date;
-  }>;
-}>;
-
 const idleSessionDuration = 7 * 24 * 60 * 60 * 1_000;
 const absoluteSessionDuration = 30 * 24 * 60 * 60 * 1_000;
-const passwordResetDuration = 30 * 60 * 1_000;
 const recentAuthenticationDuration = 10 * 60 * 1_000;
 
 /**
@@ -97,6 +81,11 @@ export function createIdentity(options: IdentityOptions) {
     randomToken,
   });
   const users = createUsers(createD1UserPersistence(options.db), { now, randomId });
+  const passwordResets = createPasswordResets(createD1PasswordResetPersistence(options.db), {
+    now,
+    randomId,
+    randomToken,
+  });
 
   return {
     async writeInitialSetup(input: InitialSetupInput): Promise<void> {
@@ -456,108 +445,9 @@ export function createIdentity(options: IdentityOptions) {
 
     reactivateUser: users.reactivateUser,
 
-    async issuePasswordReset(
-      input: Readonly<{ actorId: string; userId: string }>,
-    ): Promise<
-      PasswordResetResult | Readonly<{ ok: false; kind: "user-not-found" | "user-suspended" }>
-    > {
-      const user = await findUser(options.db, input.userId);
-      if (!user || user.state === "invited") {
-        return { ok: false, kind: "user-not-found" };
-      }
-      if (user.state === "suspended") {
-        return { ok: false, kind: "user-suspended" };
-      }
-      const occurredAt = now().getTime();
-      const expiresAt = new Date(occurredAt + passwordResetDuration);
-      const token = randomToken();
-      await options.db.batch([
-        options.db.prepare("DELETE FROM password_resets WHERE user_id = ?").bind(user.id),
-        options.db
-          .prepare(
-            `INSERT INTO password_resets (id, user_id, token_hash, issued_at, expires_at)
-             VALUES (?, ?, ?, ?, ?)`,
-          )
-          .bind(randomId(), user.id, await hashToken(token), occurredAt, expiresAt.getTime()),
-        options.db
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             VALUES (?, ?, 'password-reset-issue', ?, ?, '{}')`,
-          )
-          .bind(randomId(), input.actorId, user.id, occurredAt),
-      ]);
-      return {
-        ok: true,
-        kind: "password-reset",
-        passwordReset: { user, token, expiresAt },
-      };
-    },
+    issuePasswordReset: passwordResets.issuePasswordReset,
 
-    async usePasswordReset(
-      input: Readonly<{ token: string; password: string }>,
-    ): Promise<
-      TokenFailure | PasswordFailure | Readonly<{ ok: true; kind: "password-reset"; user: User }>
-    > {
-      const occurredAt = now().getTime();
-      const tokenHash = await hashToken(input.token);
-      const user = await options.db
-        .prepare(
-          `SELECT users.id, users.display_email AS email, users.role, users.state
-           FROM password_resets
-           INNER JOIN users ON users.id = password_resets.user_id
-           WHERE password_resets.token_hash = ?
-             AND password_resets.expires_at > ?
-             AND users.state = 'active'`,
-        )
-        .bind(tokenHash, occurredAt)
-        .first<User>();
-      if (!user) {
-        return { ok: false, kind: "invalid-or-expired-token" };
-      }
-      const verifier = await createPasswordVerifier(input.password);
-      if (!verifier) {
-        return { ok: false, kind: "invalid-password" };
-      }
-
-      const tokenCondition = `EXISTS (
-        SELECT 1 FROM password_resets
-        WHERE user_id = ? AND token_hash = ? AND expires_at > ?
-      )`;
-      const results = await options.db.batch([
-        options.db
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, id, 'password-reset-use', id, ?, '{}'
-             FROM users
-             WHERE id = ? AND state = 'active' AND ${tokenCondition}`,
-          )
-          .bind(randomId(), occurredAt, user.id, user.id, tokenHash, occurredAt),
-        options.db
-          .prepare(
-            `UPDATE credentials SET verifier = ?, updated_at = ?
-             WHERE user_id = ? AND ${tokenCondition}`,
-          )
-          .bind(verifier, occurredAt, user.id, user.id, tokenHash, occurredAt),
-        options.db
-          .prepare(
-            `DELETE FROM sessions
-             WHERE user_id = ? AND ${tokenCondition}`,
-          )
-          .bind(user.id, user.id, tokenHash, occurredAt),
-        options.db
-          .prepare(
-            `DELETE FROM password_resets
-             WHERE user_id = ? AND token_hash = ? AND expires_at > ?`,
-          )
-          .bind(user.id, tokenHash, occurredAt),
-      ]);
-      if ((results[3]?.meta.changes ?? 0) === 0) {
-        return { ok: false, kind: "invalid-or-expired-token" };
-      }
-      return { ok: true, kind: "password-reset", user };
-    },
+    usePasswordReset: passwordResets.usePasswordReset,
 
     async reauthenticate(
       input: Readonly<{ token: string; password: string }>,
