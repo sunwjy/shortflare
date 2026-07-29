@@ -9,6 +9,8 @@ import { createD1UserPersistence } from "./identity/d1-users";
 import { createUsers } from "./identity/users";
 import { createD1PasswordResetPersistence } from "./identity/d1-password-resets";
 import { createPasswordResets } from "./identity/password-resets";
+import { createD1OperatorRecoveryPersistence } from "./identity/d1-operator-recovery";
+import { createOperatorRecovery } from "./identity/operator-recovery";
 
 export type { User, UserRole, UserState } from "./identity/shared";
 
@@ -85,6 +87,10 @@ export function createIdentity(options: IdentityOptions) {
     now,
     randomId,
     randomToken,
+  });
+  const operatorRecovery = createOperatorRecovery(createD1OperatorRecoveryPersistence(options.db), {
+    now,
+    randomId,
   });
 
   return {
@@ -569,108 +575,8 @@ export function createIdentity(options: IdentityOptions) {
       return { ok: true, kind: "logged-out" };
     },
 
-    async writeOperatorRecovery(
-      input: Readonly<{ email: string; token: string; expiresAt: Date }>,
-    ): Promise<void> {
-      const email = parseUserEmail(input.email);
-      if (!email) {
-        throw new Error("Active Administrator not found");
-      }
-      const user = await options.db
-        .prepare(
-          `SELECT id, display_email AS email, role, state
-           FROM users
-           WHERE normalized_email = ?
-             AND state = 'active'
-             AND role = 'administrator'`,
-        )
-        .bind(email.normalized)
-        .first<User>();
-      if (!user) {
-        throw new Error("Active Administrator not found");
-      }
-      const occurredAt = now().getTime();
-      await options.db.batch([
-        options.db.prepare("DELETE FROM operator_recovery WHERE singleton_key = 1"),
-        options.db
-          .prepare(
-            `INSERT INTO operator_recovery
-               (singleton_key, user_id, token_hash, created_at, expires_at)
-             VALUES (1, ?, ?, ?, ?)`,
-          )
-          .bind(user.id, await hashToken(input.token), occurredAt, input.expiresAt.getTime()),
-      ]);
-    },
+    writeOperatorRecovery: operatorRecovery.writeOperatorRecovery,
 
-    async useOperatorRecovery(
-      input: Readonly<{ token: string; password: string }>,
-    ): Promise<
-      TokenFailure | PasswordFailure | Readonly<{ ok: true; kind: "operator-recovery"; user: User }>
-    > {
-      const occurredAt = now().getTime();
-      const tokenHash = await hashToken(input.token);
-      const user = await options.db
-        .prepare(
-          `SELECT users.id, users.display_email AS email, users.role, users.state
-           FROM operator_recovery
-           INNER JOIN users ON users.id = operator_recovery.user_id
-           WHERE operator_recovery.singleton_key = 1
-             AND operator_recovery.token_hash = ?
-             AND operator_recovery.expires_at > ?
-             AND users.state = 'active'
-             AND users.role = 'administrator'`,
-        )
-        .bind(tokenHash, occurredAt)
-        .first<User>();
-      if (!user) {
-        return { ok: false, kind: "invalid-or-expired-token" };
-      }
-      const verifier = await createPasswordVerifier(input.password);
-      if (!verifier) {
-        return { ok: false, kind: "invalid-password" };
-      }
-      const recoveryCondition = `EXISTS (
-        SELECT 1 FROM operator_recovery
-        WHERE singleton_key = 1
-          AND user_id = ?
-          AND token_hash = ?
-          AND expires_at > ?
-      )`;
-      const results = await options.db.batch([
-        options.db
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, 'system', 'operator-recovery', id, ?, '{}'
-             FROM users
-             WHERE id = ? AND state = 'active' AND role = 'administrator'
-               AND ${recoveryCondition}`,
-          )
-          .bind(randomId(), occurredAt, user.id, user.id, tokenHash, occurredAt),
-        options.db
-          .prepare(
-            `UPDATE credentials SET verifier = ?, updated_at = ?
-             WHERE user_id = ? AND ${recoveryCondition}`,
-          )
-          .bind(verifier, occurredAt, user.id, user.id, tokenHash, occurredAt),
-        options.db
-          .prepare(
-            `DELETE FROM sessions
-             WHERE user_id = ? AND ${recoveryCondition}`,
-          )
-          .bind(user.id, user.id, tokenHash, occurredAt),
-        options.db
-          .prepare(
-            `DELETE FROM operator_recovery
-             WHERE singleton_key = 1 AND user_id = ?
-               AND token_hash = ? AND expires_at > ?`,
-          )
-          .bind(user.id, tokenHash, occurredAt),
-      ]);
-      if ((results[3]?.meta.changes ?? 0) === 0) {
-        return { ok: false, kind: "invalid-or-expired-token" };
-      }
-      return { ok: true, kind: "operator-recovery", user };
-    },
+    useOperatorRecovery: operatorRecovery.useOperatorRecovery,
   };
 }
