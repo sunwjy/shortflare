@@ -54,7 +54,7 @@ Optimize for future agents first, then people.
 
 ### APIs and verification
 
-- Use current APIs for React 19, Hono 4, Drizzle ORM 0.x, TypeScript 6, and Vitest 4 (versions from `pnpm-workspace.yaml`/lockfile); verify uncertainty with types/docs, run `pnpm check:deprecated`, and ADR exceptions without replacements.
+- Avoid deprecated APIs.
 - Run focused tests while iterating and `pnpm check` before completion.
 - Behavior changes need interface-level regression tests; refactors keep existing
   tests green.
