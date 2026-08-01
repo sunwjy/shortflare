@@ -53,6 +53,8 @@ export function SensitiveAliasDialog({
           },
         );
         const nextSession = { user: refreshed.user, csrfToken: refreshed.csrfToken };
+        // Recent authentication rotates the CSRF token, but the destructive
+        // action still requires a second explicit submit with the new token.
         setCsrfToken(refreshed.csrfToken);
         onSession(nextSession);
         setNeedsReauthentication(false);

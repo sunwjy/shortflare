@@ -43,6 +43,8 @@ export function createD1OperatorRecoveryPersistence(
         .first<User>();
     },
     async use(input) {
+      // ADR-0008 makes recovery a one-time atomic handoff. Repeating the token
+      // condition prevents any side effect if the handoff expires or is consumed.
       const condition = `EXISTS (
         SELECT 1 FROM operator_recovery
         WHERE singleton_key = 1 AND user_id = ? AND token_hash = ? AND expires_at > ?

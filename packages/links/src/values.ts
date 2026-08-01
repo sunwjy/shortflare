@@ -14,6 +14,8 @@ export function generateRandomAlias(): string {
   while (characters.length < 6) {
     const bytes = crypto.getRandomValues(new Uint8Array(6));
     for (const byte of bytes) {
+      // 248 is the largest multiple of 62 below 256; rejecting the remainder
+      // prevents modulo bias in generated Base62 Aliases.
       if (byte < 248) {
         characters.push(aliasAlphabet[byte % aliasAlphabet.length] ?? "");
         if (characters.length === 6) {
@@ -49,6 +51,9 @@ export function normalizeTitle(value: string): string | null {
 }
 
 export function foldCase(value: string): string {
+  // Search uses persisted D1 keys and an in-memory adapter, so folding must be
+  // deterministic across both rather than depend on runtime locale collation;
+  // the explicit replacements complete the special folds needed by search.
   return value
     .normalize("NFKD")
     .toLowerCase()
@@ -56,6 +61,11 @@ export function foldCase(value: string): string {
     .replaceAll("\u03c2", "\u03c3");
 }
 
+/**
+ * Cursor payloads are versioned and bound to the query that produced them.
+ * They are opaque continuation state, not secrets or authorization tokens;
+ * decoders must continue to validate every field before persistence sees it.
+ */
 export function encodeListCursor(
   search: string,
   states: readonly string[],

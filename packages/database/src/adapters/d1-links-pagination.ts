@@ -29,6 +29,8 @@ export async function listLinks(
   }
 
   const statePlaceholders = query.states.map(() => "?").join(", ");
+  // The seek predicate must mirror the immutable ORDER BY exactly; using
+  // updated_at or reversing the ID tie-breaker would skip or duplicate rows.
   const cursorSql =
     query.cursor === undefined
       ? ""

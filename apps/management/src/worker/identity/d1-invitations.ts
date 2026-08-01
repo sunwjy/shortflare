@@ -14,6 +14,8 @@ export function createD1InvitationPersistence(database: D1Database): InvitationP
     },
 
     async issue(input) {
+      // Issuing replaces any prior token for this Invited User in the same batch
+      // that establishes the User state and records the Audit Event.
       const statements = [
         input.existing
           ? database
@@ -92,6 +94,8 @@ export function createD1InvitationPersistence(database: D1Database): InvitationP
     },
 
     async accept(input) {
+      // Token consumption, credential creation, activation, and its Audit Event
+      // are one transition so an Invitation cannot be partially accepted.
       try {
         const results = await database.batch([
           database

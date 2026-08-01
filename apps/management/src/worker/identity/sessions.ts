@@ -68,6 +68,11 @@ export type ChangePasswordRecord = Readonly<{
   verifier: string;
 }>;
 
+/**
+ * Owns Session lifetime, credential verification, CSRF, and recent-auth policy.
+ * Persistence operations retain the atomic storage guarantees while this module
+ * decides when a Session may be created, refreshed, rotated, or revoked.
+ */
 export function createSessions(
   persistence: SessionPersistence,
   dependencies: Readonly<{
@@ -80,6 +85,8 @@ export function createSessions(
     async login(input: Readonly<{ email: string; password: string }>) {
       const email = parseUserEmail(input.email);
       const record = email ? await persistence.findCredentialByEmail(email.normalized) : null;
+      // Unknown accounts use a valid current-policy verifier so login does not
+      // skip the expensive KDF and expose account existence through timing.
       const verification = await verifyPassword(input.password, record?.verifier ?? dummyVerifier);
       if (!record || record.state !== "active" || !record.verifier || !verification.valid) {
         return { ok: false, kind: "invalid-credentials" } as const;
@@ -132,6 +139,8 @@ export function createSessions(
         return { ok: false, kind: "reauthentication-required" } as const;
       }
       if (occurredAt - record.lastSeenAt >= refreshInterval) {
+        // The expected timestamp makes concurrent refreshes harmless, and the
+        // idle extension is always capped by the original absolute lifetime.
         await persistence.refresh({
           expectedLastSeenAt: record.lastSeenAt,
           idleExpiresAt: Math.min(occurredAt + idleDuration, record.absoluteExpiresAt),
@@ -169,6 +178,8 @@ export function createSessions(
 
       const token = dependencies.randomToken();
       const csrfToken = dependencies.randomToken();
+      // Reauthentication rotates both bearer secrets but preserves the Session's
+      // identity and absolute expiry; recent auth must not extend total lifetime.
       await persistence.rotate({
         csrfToken,
         idleExpiresAt: Math.min(occurredAt + idleDuration, record.absoluteExpiresAt),

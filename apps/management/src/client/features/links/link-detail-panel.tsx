@@ -77,6 +77,8 @@ export function LinkDetailPanel() {
         ]);
         return;
       }
+      // Preserve the User's drafts and replace only the server snapshot so the
+      // conflict remains an explicit review instead of an implicit merge.
       const latest = await jsonRequest(
         `/api/internal/links/${encodeURIComponent(linkId)}`,
         linkResponseSchema,

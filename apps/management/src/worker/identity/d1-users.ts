@@ -1,6 +1,11 @@
 import type { UserPersistence } from "./users";
 import type { User } from "./shared";
 
+/**
+ * Persists User lifecycle changes with their Audit Event and Session revocation.
+ * Write-time guards enforce recent authentication and preserve at least one
+ * Active Administrator without trusting an earlier application read.
+ */
 export function createD1UserPersistence(database: D1Database): UserPersistence {
   return {
     async list() {
@@ -27,6 +32,8 @@ export function createD1UserPersistence(database: D1Database): UserPersistence {
     async changeRole(input) {
       const guard = roleChangeGuard;
       const metadata = JSON.stringify({ fromRole: input.storedRole, toRole: input.role });
+      // Audit insertion and mutation deliberately share the same guard. The D1
+      // batch then makes the audit, state change, and Session revocation atomic.
       const results = await database.batch([
         database
           .prepare(
@@ -73,6 +80,8 @@ export function createD1UserPersistence(database: D1Database): UserPersistence {
         fromUserState: "active",
         toUserState: "suspended",
       });
+      // Keep the protection predicate identical for the Audit Event and update;
+      // otherwise a concurrent role change could make their outcomes disagree.
       const results = await database.batch([
         database
           .prepare(

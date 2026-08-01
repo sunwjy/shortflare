@@ -154,6 +154,8 @@ export function createD1SessionPersistence(database: D1Database): SessionPersist
         .first<User & { verifier: string }>();
     },
     async changePassword(input) {
+      // Password replacement, its Audit Event, and revocation of every Session
+      // are one D1 transaction, so all existing Sessions are revoked with it.
       const results = await database.batch([
         database
           .prepare(

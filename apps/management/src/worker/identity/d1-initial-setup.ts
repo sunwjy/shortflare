@@ -66,6 +66,8 @@ export function createD1InitialSetupPersistence(database: D1Database): InitialSe
         .first<{ displayEmail: string; normalizedEmail: string }>();
     },
     async complete(input) {
+      // ADR-0007 requires one atomic handoff consumption: the first Administrator,
+      // credential, completion marker, and Audit Event either all commit or none do.
       try {
         await database.batch([
           database

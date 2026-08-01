@@ -47,6 +47,8 @@ export function createD1PasswordResetPersistence(database: D1Database): Password
     },
 
     async use(input) {
+      // Every side effect is conditional on the same live token, and the final
+      // delete consumes it in the batch with the password change and revocations.
       const tokenCondition = `EXISTS (
         SELECT 1 FROM password_resets
         WHERE user_id = ? AND token_hash = ? AND expires_at > ?
