@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { getRouteApi, Outlet } from "@tanstack/react-router";
 import { Search } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { useState } from "react";
 
 import { jsonRequest, noContentRequest } from "../../api";
 import { linksPageResponseSchema, reservedAliasesPageResponseSchema } from "../../api-schemas";
@@ -19,7 +19,6 @@ export function LinksPage() {
   const { session } = rootApi.useRouteContext();
   const search = linksApi.useSearch();
   const navigate = linksApi.useNavigate();
-  const [searchDraft, setSearchDraft] = useState(search.search ?? "");
   const [collection, setCollection] = useState<"links" | "reserved">("links");
   const links = useInfiniteQuery({
     queryKey: ["links", search],
@@ -29,12 +28,7 @@ export function LinksPage() {
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
 
-  useEffect(() => {
-    setSearchDraft(search.search ?? "");
-  }, [search.search]);
-
-  function submitSearch(event: FormEvent) {
-    event.preventDefault();
+  function submitSearch(searchDraft: string) {
     void navigate({
       search: {
         ...(searchDraft.trim() ? { search: searchDraft.trim() } : {}),
@@ -102,19 +96,11 @@ export function LinksPage() {
       ) : (
         <>
           <div className="command-bar">
-            <form className="link-search" role="search" onSubmit={submitSearch}>
-              <Search aria-hidden="true" size={18} strokeWidth={1.75} />
-              <input
-                type="search"
-                aria-label="Search Links"
-                placeholder="Search Alias or title"
-                value={searchDraft}
-                onChange={(event) => setSearchDraft(event.target.value)}
-              />
-              <Button type="submit" variant="secondary">
-                Search
-              </Button>
-            </form>
+            <LinkSearchForm
+              key={search.search ?? ""}
+              initialSearch={search.search ?? ""}
+              onSearch={submitSearch}
+            />
             <div className="state-filters" aria-label="Filter by Link state">
               {(["active", "disabled", "archived"] as const).map((state) => (
                 <Button
@@ -182,6 +168,39 @@ export function LinksPage() {
       )}
       <Outlet />
     </>
+  );
+}
+
+function LinkSearchForm({
+  initialSearch,
+  onSearch,
+}: {
+  initialSearch: string;
+  onSearch: (search: string) => void;
+}) {
+  const [search, setSearch] = useState(initialSearch);
+
+  return (
+    <form
+      className="link-search"
+      role="search"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSearch(search);
+      }}
+    >
+      <Search aria-hidden="true" size={18} strokeWidth={1.75} />
+      <input
+        type="search"
+        aria-label="Search Links"
+        placeholder="Search Alias or title"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+      />
+      <Button type="submit" variant="secondary">
+        Search
+      </Button>
+    </form>
   );
 }
 

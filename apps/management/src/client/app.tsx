@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { jsonRequest } from "./api";
 import { sessionResponseSchema } from "./api-schemas";
@@ -8,9 +8,9 @@ import { applyTheme, readTheme, type Theme } from "./theme";
 import type { Session, TokenRoute } from "./types";
 
 export function App() {
-  const tokenRoute = useMemo(readTokenRoute, []);
+  const [tokenRoute] = useState<TokenRoute | undefined>(readTokenRoute);
   const [session, setSession] = useState<Session>();
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!tokenRoute);
   const [theme, setTheme] = useState<Theme>(readTheme);
 
   useEffect(() => {
@@ -18,10 +18,7 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (tokenRoute) {
-      setLoading(false);
-      return;
-    }
+    if (tokenRoute) return;
     void jsonRequest("/api/internal/auth/session", sessionResponseSchema)
       .then((response) => {
         setSession({ user: response.user, csrfToken: response.csrfToken });

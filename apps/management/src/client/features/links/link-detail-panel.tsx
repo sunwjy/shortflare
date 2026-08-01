@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getRouteApi, useBlocker } from "@tanstack/react-router";
 import { Trash2, X } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useState } from "react";
 
 import { ApiError, jsonRequest } from "../../api";
 import {
@@ -108,12 +108,6 @@ export function LinkDetailPanel() {
       ]);
     },
   });
-
-  useEffect(() => {
-    if (!link.data || editing) return;
-    setTitleDraft(link.data.link.title);
-    setDestinationDraft(link.data.link.destination.url);
-  }, [editing, link.data]);
 
   const dirty =
     Boolean(editing && link.data) &&
