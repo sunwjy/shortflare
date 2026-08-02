@@ -709,7 +709,8 @@ and idempotent.
 1. Workspace tooling, local runtime, D1 schema, and migration pipeline.
 2. Links module and Redirect Worker without analytics.
 3. Invite-only authentication, roles, and Link management endpoints.
-4. React management UI using TanStack Router and TanStack Query.
+4. React management UI using TanStack Router, TanStack Query, and the UI stack
+   selected in ADR-0011.
 5. Durable analytics ingestion, dimensions, retention, and dashboards.
 6. Idempotent public deployment and upgrade CLI.
 7. Browser end-to-end and Cloudflare deployment smoke tests.
@@ -717,7 +718,6 @@ and idempotent.
 
 ## Deliberately open details
 
-- UI styling system and visual component source.
 - The password KDF and parameters, pending Workers CPU benchmarks.
 - The concrete rate-limit adapter and initial thresholds.
 - Analytics Engine implementation and mode-switch UX after the MVP.

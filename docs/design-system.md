@@ -435,6 +435,14 @@ Buttons move down 1px on press. Loading preserves the original label width.
 Labels sit above fields. Helper text is optional and error text appears directly
 below the field. Placeholder text never replaces a label.
 
+Mutation forms use TanStack Form with Zod Standard Schema validation. Validate
+a field when it loses focus and validate the complete form on submit. After an
+error is visible, revalidate that field as its value changes. A submit attempt
+must remain available so the interface can explain invalid input; disable the
+submit action while its request is pending. Server validation remains
+authoritative, and its field and form errors appear at the same accessible seams
+as client validation.
+
 URL and Alias fields use mono text for the value, but their labels and helper
 text remain sans.
 
@@ -595,19 +603,24 @@ the consequence rather than trying to sound reassuring.
 
 ## Implementation boundary
 
-The system should be implemented as semantic CSS custom properties and owned
-React components inside `apps/management`. Component behavior may use accessible
-headless primitives, but the visual layer remains Shortflare-owned.
+The system is implemented through shadcn semantic CSS custom properties,
+Tailwind utilities, and source-owned React modules inside `apps/management`.
+Global CSS owns theme variables and document-wide base rules only. Reusable
+interaction primitives live under `components/ui`; domain compositions live
+with their feature. TanStack Form field adapters own common field structure,
+error rendering, and ARIA wiring without becoming a configuration-driven form
+builder. See ADR-0011.
 
 Suggested first implementation slice:
 
-1. foundation tokens and theme root;
-2. Button, Field, StatusChip, and Banner;
-3. AppShell and PageHeader;
-4. LinkRow, CommandBar, and Link detail sheet;
-5. Dialog and destructive confirmation;
-6. Metric summary and chart panel;
-7. authentication and User management migration.
+1. foundation tokens, theme root, and shadcn primitives;
+2. shared TanStack Form field adapters;
+3. authentication forms;
+4. AppShell and navigation;
+5. Security and User management;
+6. Link collection, creation, detail, and confirmation flows;
+7. responsive and accessibility verification;
+8. removal of the legacy semantic CSS component layer.
 
 ## Design review checklist
 
