@@ -14,7 +14,7 @@ export function App() {
   const [theme, setTheme] = useState<Theme>(readTheme);
 
   useEffect(() => {
-    applyTheme(theme);
+    return applyTheme(theme);
   }, [theme]);
 
   useEffect(() => {
@@ -32,7 +32,10 @@ export function App() {
   }
   if (loading) {
     return (
-      <main className="auth-shell" aria-busy="true">
+      <main
+        className="grid min-h-screen place-items-center bg-background px-4 text-foreground"
+        aria-busy="true"
+      >
         <p>Loading Shortflare…</p>
       </main>
     );

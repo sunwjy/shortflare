@@ -9,5 +9,19 @@ export function readTheme(): Theme {
 
 export function applyTheme(theme: Theme) {
   window.localStorage.setItem(themeStorageKey, theme);
-  document.documentElement.dataset.theme = theme;
+  const media =
+    theme === "system" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-color-scheme: dark)")
+      : undefined;
+  const root = document.documentElement;
+
+  function syncTheme() {
+    const dark = theme === "dark" || (theme === "system" && media?.matches === true);
+    root.classList.toggle("dark", dark);
+    root.style.colorScheme = dark ? "dark" : "light";
+  }
+
+  syncTheme();
+  media?.addEventListener("change", syncTheme);
+  return () => media?.removeEventListener("change", syncTheme);
 }

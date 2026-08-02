@@ -6,8 +6,14 @@ import { useState } from "react";
 import { jsonRequest } from "../../api";
 import { linkMutationResponseSchema } from "../../api-schemas";
 import { Button } from "../../components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
 import type { LinkDto } from "../../types";
-import { formatDate, middleTruncate, StatusChip } from "./link-presentation";
+import { formatDate, StatusChip } from "./link-presentation";
 
 const rootApi = getRouteApi("__root__");
 const linksApi = getRouteApi("/links");
@@ -21,6 +27,10 @@ export function LinkRow({ link }: Readonly<{ link: LinkDto }>) {
   const selected = Boolean(
     matchRoute({ to: "/links/$linkId", params: { linkId: link.id }, fuzzy: false }),
   );
+  const actionMenuTrigger = (
+    <Button variant="ghost" size="icon" aria-label={`More actions for ${link.title}`} />
+  );
+  const detailsMenuLink = <Link to="/links/$linkId" params={{ linkId: link.id }} search={search} />;
 
   async function copyShortUrl() {
     await navigator.clipboard.writeText(link.shortUrl);
@@ -61,59 +71,62 @@ export function LinkRow({ link }: Readonly<{ link: LinkDto }>) {
         : [["restore", "Restore Link"]];
 
   return (
-    <article className={`link-row${selected ? " link-row--selected" : ""}`}>
+    <article
+      className={`grid min-h-18 grid-cols-[1fr_auto] items-center gap-3 border-b px-3 py-4 md:grid-cols-[7.5rem_minmax(0,1fr)_auto_auto_auto] ${
+        selected ? "bg-accent shadow-[inset_2px_0_var(--primary)]" : ""
+      }`}
+    >
       <StatusChip state={link.state} />
-      <div className="link-identity">
+      <div className="col-span-2 grid min-w-0 gap-0.5 md:col-span-1">
         <strong>
           <Link
             to="/links/$linkId"
             params={{ linkId: link.id }}
             search={search}
+            className="text-sm text-foreground underline-offset-4 hover:underline"
             aria-label={`Open ${link.title}`}
           >
             /{link.alias}
           </Link>
         </strong>
-        <span className="link-route">{link.title}</span>
+        <span className="text-sm text-foreground">{link.title}</span>
         <span
-          className="link-destination"
+          className="truncate text-xs text-muted-foreground focus:whitespace-normal focus:break-all"
           tabIndex={0}
-          data-full-value={link.destination.url}
           title={link.destination.url}
         >
-          {middleTruncate(link.destination.url)}
+          {link.destination.url}
         </span>
       </div>
-      <time dateTime={link.updatedAt}>{formatDate(link.updatedAt)}</time>
+      <time className="hidden text-xs text-muted-foreground md:block" dateTime={link.updatedAt}>
+        {formatDate(link.updatedAt)}
+      </time>
       <Button
-        variant="quiet"
+        variant="ghost"
         aria-label={`${copied ? "Copied" : "Copy"} short URL for ${link.title}`}
         onClick={() => void copyShortUrl()}
       >
         <Copy aria-hidden="true" size={16} strokeWidth={1.75} />
         {copied ? "Copied" : "Copy"}
       </Button>
-      <details className="row-menu">
-        <summary aria-label={`More actions for ${link.title}`}>
+      <DropdownMenu>
+        <DropdownMenuTrigger render={actionMenuTrigger}>
           <MoreHorizontal aria-hidden="true" size={18} strokeWidth={1.75} />
-        </summary>
-        <div>
-          <Link to="/links/$linkId" params={{ linkId: link.id }} search={search}>
-            Open details
-          </Link>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem render={detailsMenuLink}>Open details</DropdownMenuItem>
           {session.user.role !== "viewer" &&
             rowCommands.map(([command, label]) => (
-              <button
-                type="button"
+              <DropdownMenuItem
                 key={command}
                 disabled={stateChange.isPending}
                 onClick={() => stateChange.mutate(command)}
               >
                 {label}
-              </button>
+              </DropdownMenuItem>
             ))}
-        </div>
-      </details>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </article>
   );
 }

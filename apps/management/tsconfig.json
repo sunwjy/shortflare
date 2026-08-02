@@ -1,6 +1,9 @@
 {
   "extends": "../../packages/tooling/typescript/browser.json",
   "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    },
     "types": [
       "@cloudflare/workers-types",
       "@cloudflare/vitest-pool-workers/types",

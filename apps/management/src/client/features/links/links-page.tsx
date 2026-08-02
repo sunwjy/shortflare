@@ -6,6 +6,7 @@ import { useState } from "react";
 import { jsonRequest, noContentRequest } from "../../api";
 import { linksPageResponseSchema, reservedAliasesPageResponseSchema } from "../../api-schemas";
 import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
 import type { LinkState, ReservedAliasDto } from "../../types";
 import { LinkRow } from "./link-row";
 import { formatDate, LinkRowsSkeleton, stateLabel } from "./link-presentation";
@@ -53,10 +54,12 @@ export function LinksPage() {
 
   return (
     <>
-      <header className="page-header">
+      <header className="mb-7 flex items-start justify-between gap-3">
         <div>
-          <h1>Links</h1>
-          <p>Find and manage every short path in this Instance.</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Links</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Find and manage every short path in this Instance.
+          </p>
         </div>
         {session.user.role !== "viewer" && (
           <Button
@@ -72,11 +75,15 @@ export function LinksPage() {
         )}
       </header>
       {session.user.role === "administrator" && (
-        <div className="collection-tabs" role="tablist" aria-label="Link collections">
+        <div
+          className="flex w-fit gap-1 rounded-lg border bg-card p-1"
+          role="tablist"
+          aria-label="Link collections"
+        >
           <Button
             role="tab"
             aria-selected={collection === "links"}
-            variant={collection === "links" ? "secondary" : "quiet"}
+            variant={collection === "links" ? "secondary" : "ghost"}
             onClick={() => setCollection("links")}
           >
             Links
@@ -84,7 +91,7 @@ export function LinksPage() {
           <Button
             role="tab"
             aria-selected={collection === "reserved"}
-            variant={collection === "reserved" ? "secondary" : "quiet"}
+            variant={collection === "reserved" ? "secondary" : "ghost"}
             onClick={() => setCollection("reserved")}
           >
             Reserved Aliases
@@ -95,17 +102,17 @@ export function LinksPage() {
         <ReservedAliases />
       ) : (
         <>
-          <div className="command-bar">
+          <div className="my-4 flex flex-col items-stretch justify-between gap-3 md:flex-row md:items-center">
             <LinkSearchForm
               key={search.search ?? ""}
               initialSearch={search.search ?? ""}
               onSearch={submitSearch}
             />
-            <div className="state-filters" aria-label="Filter by Link state">
+            <div className="flex gap-1 overflow-x-auto" aria-label="Filter by Link state">
               {(["active", "disabled", "archived"] as const).map((state) => (
                 <Button
                   key={state}
-                  variant={search.state.includes(state) ? "secondary" : "quiet"}
+                  variant={search.state.includes(state) ? "secondary" : "ghost"}
                   aria-pressed={search.state.includes(state)}
                   onClick={() => toggleState(state)}
                 >
@@ -114,17 +121,19 @@ export function LinksPage() {
               ))}
             </div>
           </div>
-          <section aria-label="Link collection" className="collection">
+          <section aria-label="Link collection" className="border-t">
             {links.isPending && <LinkRowsSkeleton />}
             {links.isError && (
-              <p className="collection-banner">Links could not be loaded. Try again.</p>
+              <p className="rounded-lg border bg-muted p-4 text-sm">
+                Links could not be loaded. Try again.
+              </p>
             )}
             {links.data?.pages.flatMap((page) => page.items).length === 0 && (
-              <div className="empty-state">
-                <h2>
+              <div className="mx-auto my-8 rounded-lg border bg-card p-6 text-center">
+                <h2 className="text-lg font-semibold tracking-tight">
                   {search.search || search.state.length ? "No matching Links" : "No Links yet"}
                 </h2>
-                <p>
+                <p className="mt-2 mb-4 text-sm text-muted-foreground">
                   {search.search || search.state.length
                     ? "Try a different search or state filter."
                     : "Create the first Link to begin shortening paths."}
@@ -154,7 +163,7 @@ export function LinksPage() {
               ))}
           </section>
           {links.hasNextPage && (
-            <div className="form-actions">
+            <div className="mt-4 flex flex-wrap justify-end gap-3">
               <Button
                 variant="secondary"
                 disabled={links.isFetchingNextPage}
@@ -182,15 +191,21 @@ function LinkSearchForm({
 
   return (
     <form
-      className="link-search"
+      className="flex w-full max-w-lg items-center gap-2 rounded-lg border border-input bg-card p-1.5"
       role="search"
       onSubmit={(event) => {
         event.preventDefault();
         onSearch(search);
       }}
     >
-      <Search aria-hidden="true" size={18} strokeWidth={1.75} />
-      <input
+      <Search
+        className="ml-1 text-muted-foreground"
+        aria-hidden="true"
+        size={18}
+        strokeWidth={1.75}
+      />
+      <Input
+        className="border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent"
         type="search"
         aria-label="Search Links"
         placeholder="Search Alias or title"
@@ -229,17 +244,23 @@ function ReservedAliases() {
   });
 
   return (
-    <section className="reserved-collection" aria-label="Reserved Alias collection">
+    <section className="mt-4" aria-label="Reserved Alias collection">
       <form
-        className="link-search"
+        className="flex w-full max-w-lg items-center gap-2 rounded-lg border border-input bg-card p-1.5"
         role="search"
         onSubmit={(event) => {
           event.preventDefault();
           setSubmittedSearch(search.trim());
         }}
       >
-        <Search aria-hidden="true" size={18} strokeWidth={1.75} />
-        <input
+        <Search
+          className="ml-1 text-muted-foreground"
+          aria-hidden="true"
+          size={18}
+          strokeWidth={1.75}
+        />
+        <Input
+          className="border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent"
           type="search"
           aria-label="Search Reserved Aliases"
           placeholder="Search Alias"
@@ -250,31 +271,43 @@ function ReservedAliases() {
           Search
         </Button>
       </form>
-      <div className="collection">
+      <div className="mt-4 border-t">
         {aliases.isPending && <LinkRowsSkeleton />}
         {aliases.data?.pages.flatMap((page) => page.items).length === 0 && (
-          <div className="empty-state">
-            <h2>No Reserved Aliases</h2>
-            <p>Permanently deleted Link aliases will be protected here.</p>
+          <div className="mx-auto my-8 rounded-lg border bg-card p-6 text-center">
+            <h2 className="text-lg font-semibold tracking-tight">No Reserved Aliases</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Permanently deleted Link aliases will be protected here.
+            </p>
           </div>
         )}
         {aliases.data?.pages
           .flatMap((page) => page.items)
           .map((alias) => (
-            <article className="link-row reserved-row" key={alias.alias}>
-              <div className="link-identity">
+            <article
+              className="grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b px-3 py-4 md:grid-cols-[minmax(0,1fr)_auto_auto]"
+              key={alias.alias}
+            >
+              <div className="grid min-w-0 gap-1">
                 <strong>{alias.alias}</strong>
-                <span className="link-route">{alias.shortUrl}</span>
+                <span className="font-mono text-xs font-semibold text-primary">
+                  {alias.shortUrl}
+                </span>
               </div>
-              <time dateTime={alias.reservedAt}>Reserved {formatDate(alias.reservedAt)}</time>
-              <Button variant="danger" onClick={() => setSelected(alias)}>
+              <time
+                className="hidden text-xs text-muted-foreground md:block"
+                dateTime={alias.reservedAt}
+              >
+                Reserved {formatDate(alias.reservedAt)}
+              </time>
+              <Button variant="destructive" onClick={() => setSelected(alias)}>
                 Release Alias
               </Button>
             </article>
           ))}
       </div>
       {aliases.hasNextPage && (
-        <div className="form-actions">
+        <div className="mt-4 flex flex-wrap justify-end gap-3">
           <Button
             variant="secondary"
             disabled={aliases.isFetchingNextPage}

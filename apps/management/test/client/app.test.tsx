@@ -64,6 +64,38 @@ afterEach(() => {
 });
 
 describe("Management App", () => {
+  it("explains an invalid login email after the field loses focus", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => notFound()),
+    );
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const email = await screen.findByRole("textbox", { name: "User Email" });
+    await user.type(email, "not-an-email");
+    await user.tab();
+
+    expect(await screen.findByText("Enter a valid email address.")).toBeVisible();
+    expect(email).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("explains a one-time password mismatch after confirmation loses focus", async () => {
+    history.replaceState(null, "", "/setup#token=setup-token");
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(screen.getByLabelText("New password"), "long-enough-password");
+    const confirmation = screen.getByLabelText("Confirm password");
+    await user.type(confirmation, "different-password");
+    await user.tab();
+
+    expect(await screen.findByText("Passwords do not match.")).toBeVisible();
+    expect(confirmation).toHaveAttribute("aria-invalid", "true");
+  });
+
   it("shows a URL-filtered Link collection without mutation controls to a Viewer", async () => {
     history.replaceState(null, "", "/links?search=docs&state=active");
     vi.stubGlobal(
@@ -227,6 +259,31 @@ describe("Management App", () => {
     expect(await screen.findByRole("heading", { name: "Documentation" })).toBeInTheDocument();
     expect(location.pathname).toBe("/links/link-docs");
     expect(screen.getByText("https://short.test/Docs")).toBeVisible();
+  });
+
+  it("explains an unsafe Link Destination before creation", async () => {
+    history.replaceState(null, "", "/links/new");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/api/internal/auth/session") return Response.json(memberSession);
+        if (url.pathname === "/api/internal/links" && (init?.method ?? "GET") === "GET") {
+          return Response.json({ ok: true, items: [], nextCursor: null });
+        }
+        return notFound();
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const destination = await screen.findByRole("textbox", { name: "Destination" });
+    await user.type(destination, "javascript:alert(1)");
+    await user.tab();
+
+    expect(await screen.findByText("Enter a safe HTTP or HTTPS Destination.")).toBeVisible();
+    expect(destination).toHaveAttribute("aria-invalid", "true");
   });
 
   it("preserves a Member's edit and shows the current Link after a revision conflict", async () => {
@@ -453,7 +510,14 @@ describe("Management App", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Documentation" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Permanently delete" }));
-    await user.type(screen.getByRole("textbox", { name: /Type Docs/ }), "Docs");
+    const confirmation = screen.getByRole("textbox", { name: /Type Docs/ });
+    await user.type(confirmation, "Wrong");
+    await user.click(screen.getByRole("button", { name: "Permanently delete" }));
+    expect(await screen.findByText("Type Docs exactly.")).toBeVisible();
+    expect(deletionAttempts).toBe(0);
+
+    await user.clear(confirmation);
+    await user.type(confirmation, "Docs");
     await user.click(screen.getByRole("button", { name: "Permanently delete" }));
 
     await user.type(screen.getByLabelText("Current password"), "correct horse battery staple");
@@ -484,8 +548,32 @@ describe("Management App", () => {
     expect(screen.getByRole("link", { name: "Security" })).toHaveAttribute("aria-current", "page");
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Theme"), "dark");
-    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(screen.getByLabelText("Theme")).toHaveValue("dark");
+    expect(document.documentElement).toHaveClass("dark");
+    expect(document.documentElement).toHaveStyle({ colorScheme: "dark" });
     expect(localStorage.getItem("shortflare-theme")).toBe("dark");
+  });
+
+  it("explains an invalid new password on the Security form", async () => {
+    history.replaceState(null, "", "/security");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/api/internal/auth/session") return Response.json(memberSession);
+        return notFound();
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    const password = await screen.findByLabelText("New password");
+    await user.type(password, "too-short");
+    await user.tab();
+
+    expect(await screen.findByText("Use 15 to 128 characters.")).toBeVisible();
+    expect(password).toHaveAttribute("aria-invalid", "true");
   });
 
   it("shows User administration only to an Administrator", async () => {
@@ -508,5 +596,33 @@ describe("Management App", () => {
     expect(await screen.findByRole("heading", { name: "Users" })).toBeVisible();
     expect(screen.getByText("admin@example.com")).toBeVisible();
     expect(screen.getByRole("button", { name: "Invite User" })).toBeVisible();
+  });
+
+  it("explains an invalid invitation email", async () => {
+    history.replaceState(null, "", "/users");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/api/internal/auth/session") {
+          return Response.json(administratorSession);
+        }
+        if (url.pathname === "/api/internal/users") {
+          return Response.json({ ok: true, users: [administratorSession.user] });
+        }
+        return notFound();
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Invite User" }));
+    const email = screen.getByLabelText("Email");
+    await user.type(email, "not-an-email");
+    await user.tab();
+
+    expect(await screen.findByText("Enter a valid email address.")).toBeVisible();
+    expect(email).toHaveAttribute("aria-invalid", "true");
   });
 });

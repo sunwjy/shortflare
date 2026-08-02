@@ -1,9 +1,10 @@
-import { type FormEvent, useState } from "react";
+import { useState } from "react";
+import { z } from "zod";
 
 import { ApiError, jsonRequest } from "../../api";
 import { sessionResponseSchema } from "../../api-schemas";
-import { Button } from "../../components/ui/button";
-import { Dialog } from "../../components/ui/dialog";
+import { AppDialog } from "../../components/app-dialog";
+import { useAppForm } from "../../components/form/app-form";
 import type { Session } from "../../types";
 
 export function SensitiveAliasDialog({
@@ -29,120 +30,137 @@ export function SensitiveAliasDialog({
   execute: (csrfToken: string) => Promise<unknown>;
   onSuccess: () => Promise<void>;
 }>) {
-  const [confirmation, setConfirmation] = useState("");
-  const [password, setPassword] = useState("");
   const [csrfToken, setCsrfToken] = useState(session.csrfToken);
   const [needsReauthentication, setNeedsReauthentication] = useState(false);
   const [verified, setVerified] = useState(false);
-  const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const formSchema = z
+    .object({ confirmation: z.string(), password: z.string() })
+    .superRefine(({ confirmation, password }, context) => {
+      if (needsReauthentication) {
+        if (!password) {
+          context.addIssue({
+            code: "custom",
+            message: "Enter your current password.",
+            path: ["password"],
+          });
+        }
+      } else if (confirmation !== alias) {
+        context.addIssue({
+          code: "custom",
+          message: `Type ${alias} exactly.`,
+          path: ["confirmation"],
+        });
+      }
+    });
+  const form = useAppForm({
+    defaultValues: { confirmation: "", password: "" },
+    validators: {
+      onBlur: formSchema,
+      onChange: formSchema,
+      onSubmit: formSchema,
+    },
+    onSubmit: async ({ value }) => {
+      setError("");
+      if (needsReauthentication) {
+        try {
+          const refreshed = await jsonRequest(
+            "/api/internal/auth/reauthenticate",
+            sessionResponseSchema,
+            {
+              method: "POST",
+              csrfToken,
+              body: { password: value.password },
+            },
+          );
+          const nextSession = { user: refreshed.user, csrfToken: refreshed.csrfToken };
+          // Recent authentication rotates the CSRF token, but the destructive
+          // action still requires a second explicit submit with the new token.
+          setCsrfToken(refreshed.csrfToken);
+          onSession(nextSession);
+          setNeedsReauthentication(false);
+          setVerified(true);
+          form.setFieldValue("password", "");
+        } catch {
+          setError("The password is incorrect.");
+        }
+        return;
+      }
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    if (needsReauthentication) {
-      setPending(true);
       try {
-        const refreshed = await jsonRequest(
-          "/api/internal/auth/reauthenticate",
-          sessionResponseSchema,
-          {
-            method: "POST",
-            csrfToken,
-            body: { password },
-          },
-        );
-        const nextSession = { user: refreshed.user, csrfToken: refreshed.csrfToken };
-        // Recent authentication rotates the CSRF token, but the destructive
-        // action still requires a second explicit submit with the new token.
-        setCsrfToken(refreshed.csrfToken);
-        onSession(nextSession);
-        setNeedsReauthentication(false);
-        setVerified(true);
-        setPassword("");
-      } catch {
-        setError("The password is incorrect.");
-      } finally {
-        setPending(false);
+        await execute(csrfToken);
+        await onSuccess();
+      } catch (caught) {
+        if (caught instanceof ApiError && caught.body.kind === "reauthentication-required") {
+          setNeedsReauthentication(true);
+          setError("");
+        } else if (caught instanceof ApiError && caught.body.kind === "confirmation-mismatch") {
+          setError("The Alias does not match.");
+        } else {
+          setError("The action could not be completed.");
+        }
       }
-      return;
-    }
-
-    setPending(true);
-    try {
-      await execute(csrfToken);
-      await onSuccess();
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.body.kind === "reauthentication-required") {
-        setNeedsReauthentication(true);
-        setError("");
-      } else if (caught instanceof ApiError && caught.body.kind === "confirmation-mismatch") {
-        setError("The Alias does not match.");
-      } else {
-        setError("The action could not be completed.");
-      }
-    } finally {
-      setPending(false);
-    }
-  }
+    },
+  });
 
   return (
-    <Dialog
+    <AppDialog
       open={open}
       onOpenChange={(nextOpen) => !nextOpen && onClose()}
       title={title}
       description={description}
     >
-      <form className="link-form" onSubmit={(event) => void submit(event)}>
+      <form
+        className="grid gap-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void form.handleSubmit();
+        }}
+      >
         {needsReauthentication ? (
-          <div className="field">
-            <label htmlFor="sensitive-password">Current password</label>
-            <input
-              required
-              id="sensitive-password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-            <span>Verify your password to continue. The action will not run automatically.</span>
-          </div>
+          <form.AppField name="password">
+            {(field) => (
+              <field.PasswordField
+                label="Current password"
+                autoComplete="current-password"
+                description="Verify your password to continue. The action will not run automatically."
+              />
+            )}
+          </form.AppField>
         ) : (
-          <div className="field">
-            <label htmlFor="alias-confirmation">
-              Type <code>{alias}</code> to confirm
-            </label>
-            <input
-              required
-              id="alias-confirmation"
-              autoComplete="off"
-              value={confirmation}
-              onChange={(event) => setConfirmation(event.target.value)}
-            />
-          </div>
+          <form.AppField name="confirmation">
+            {(field) => (
+              <field.TextField
+                label={
+                  <>
+                    Type <code>{alias}</code> to confirm
+                  </>
+                }
+                autoComplete="off"
+              />
+            )}
+          </form.AppField>
         )}
         {verified && (
-          <p className="notice" role="status">
+          <p className="rounded-lg border bg-muted p-4 text-sm" role="status">
             Password verified. Submit the action again to continue.
           </p>
         )}
-        {error && <p className="field-error">{error}</p>}
-        <Button
-          type="submit"
-          variant="danger"
-          disabled={
-            pending || (needsReauthentication ? password.length === 0 : confirmation !== alias)
-          }
-        >
-          {needsReauthentication
-            ? pending
-              ? "Verifying…"
-              : "Verify password"
-            : pending
-              ? "Working…"
-              : submitLabel}
-        </Button>
+        {error && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+        <form.AppForm>
+          <form.SubmitButton
+            variant="destructive"
+            pendingLabel={needsReauthentication ? "Verifying…" : "Working…"}
+          >
+            {needsReauthentication ? "Verify password" : submitLabel}
+          </form.SubmitButton>
+        </form.AppForm>
       </form>
-    </Dialog>
+    </AppDialog>
   );
 }

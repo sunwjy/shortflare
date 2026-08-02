@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { createManagementRouter } from "./management-router";
 import type { Theme } from "./theme";
+import { ThemeProvider } from "./theme-context";
 import type { Session } from "./types";
 
 export function ManagementApp({
@@ -29,11 +30,10 @@ export function ManagementApp({
   const [router] = useState(createManagementRouter);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider
-        router={router}
-        context={{ session, onSession, queryClient, theme, setTheme: onTheme }}
-      />
-    </QueryClientProvider>
+    <ThemeProvider theme={theme} setTheme={onTheme}>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} context={{ session, onSession, queryClient }} />
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }

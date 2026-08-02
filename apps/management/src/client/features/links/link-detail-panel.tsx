@@ -1,7 +1,9 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useStore } from "@tanstack/react-form";
 import { getRouteApi, useBlocker } from "@tanstack/react-router";
 import { Trash2, X } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { useState } from "react";
+import { z } from "zod";
 
 import { ApiError, jsonRequest } from "../../api";
 import {
@@ -10,6 +12,8 @@ import {
   linkMutationResponseSchema,
   linkResponseSchema,
 } from "../../api-schemas";
+import { useAppForm } from "../../components/form/app-form";
+import { destinationSchema, linkTitleSchema } from "../../components/form/form-schemas";
 import { Button } from "../../components/ui/button";
 import type { LinkDto } from "../../types";
 import { linkMutationError } from "./create-link-panel";
@@ -19,6 +23,7 @@ import { SensitiveAliasDialog } from "./sensitive-alias-dialog";
 const rootApi = getRouteApi("__root__");
 const linksApi = getRouteApi("/links");
 const linkDetailApi = getRouteApi("/links/$linkId");
+const editLinkSchema = z.object({ title: linkTitleSchema, destination: destinationSchema });
 
 export function LinkDetailPanel() {
   const { session, onSession } = rootApi.useRouteContext();
@@ -27,8 +32,6 @@ export function LinkDetailPanel() {
   const search = linksApi.useSearch();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
-  const [titleDraft, setTitleDraft] = useState("");
-  const [destinationDraft, setDestinationDraft] = useState("");
   const [conflict, setConflict] = useState<LinkDto>();
   const [notice, setNotice] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -50,14 +53,14 @@ export function LinkDetailPanel() {
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
   const edit = useMutation({
-    mutationFn: () =>
+    mutationFn: (draft: { title: string; destination: string }) =>
       jsonRequest(`/api/internal/links/${encodeURIComponent(linkId)}`, linkMutationResponseSchema, {
         method: "PATCH",
         csrfToken: session.csrfToken,
         body: {
           expectedRevision: link.data?.link.revision,
-          title: titleDraft,
-          destination: destinationDraft,
+          title: draft.title,
+          destination: draft.destination,
         },
       }),
     onSuccess: async ({ link: updatedLink }) => {
@@ -87,6 +90,17 @@ export function LinkDetailPanel() {
       setConflict(latest.link);
     },
   });
+  const form = useAppForm({
+    defaultValues: { title: "", destination: "" },
+    validators: {
+      onBlur: editLinkSchema,
+      onChange: editLinkSchema,
+      onSubmit: editLinkSchema,
+    },
+    onSubmit: async ({ value }) => {
+      await edit.mutateAsync(value).catch(() => undefined);
+    },
+  });
   const stateChange = useMutation({
     mutationFn: (command: "activate" | "disable" | "archive" | "restore") =>
       jsonRequest(
@@ -111,9 +125,9 @@ export function LinkDetailPanel() {
     },
   });
 
-  const dirty =
-    Boolean(editing && link.data) &&
-    (titleDraft !== link.data?.link.title || destinationDraft !== link.data?.link.destination.url);
+  const formDirty = useStore(form.store, (state) => state.isDirty);
+  const drafts = useStore(form.store, (state) => state.values);
+  const dirty = Boolean(editing && link.data && formDirty);
   useBlocker({
     disabled: !dirty,
     enableBeforeUnload: dirty,
@@ -122,15 +136,12 @@ export function LinkDetailPanel() {
 
   function beginEditing() {
     if (!link.data) return;
-    setTitleDraft(link.data.link.title);
-    setDestinationDraft(link.data.link.destination.url);
+    form.reset({
+      title: link.data.link.title,
+      destination: link.data.link.destination.url,
+    });
     setConflict(undefined);
     setEditing(true);
-  }
-
-  function submitEdit(event: FormEvent) {
-    event.preventDefault();
-    edit.mutate();
   }
 
   function discardMine() {
@@ -143,22 +154,27 @@ export function LinkDetailPanel() {
   }
 
   function reviewChanges() {
-    const field = conflict && titleDraft !== conflict.title ? "edit-title" : "edit-destination";
+    const field = conflict && drafts.title !== conflict.title ? "title" : "destination";
     document.getElementById(field)?.focus();
   }
 
   return (
-    <aside className="detail-panel" aria-label="Link detail">
+    <aside
+      className="fixed inset-0 z-20 overflow-auto bg-card p-6 text-card-foreground shadow-2xl md:inset-y-0 md:right-0 md:left-auto md:w-full md:max-w-xl md:border-l"
+      aria-label="Link detail"
+    >
       {link.isPending && <p aria-busy="true">Loading Link…</p>}
-      {link.isError && <p className="collection-banner">This Link could not be loaded.</p>}
+      {link.isError && (
+        <p className="rounded-lg border bg-muted p-4 text-sm">This Link could not be loaded.</p>
+      )}
       {link.data && (
         <>
-          <div className="detail-panel__header">
+          <div className="mb-7 flex items-start justify-between gap-3">
             <div>
               <StatusChip state={link.data.link.state} />
-              <h2>{link.data.link.title}</h2>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight">{link.data.link.title}</h2>
             </div>
-            <div className="detail-panel__actions">
+            <div className="flex items-center gap-3">
               {!editing &&
                 session.user.role !== "viewer" &&
                 link.data.link.state !== "archived" && (
@@ -167,7 +183,7 @@ export function LinkDetailPanel() {
                   </Button>
                 )}
               <Button
-                variant="quiet"
+                variant="ghost"
                 size="icon"
                 aria-label="Close Link detail"
                 onClick={closeDetail}
@@ -177,106 +193,109 @@ export function LinkDetailPanel() {
             </div>
           </div>
           {editing ? (
-            <form className="link-form" onSubmit={submitEdit}>
+            <form
+              className="grid gap-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void form.handleSubmit();
+              }}
+            >
               {conflict && (
-                <section className="conflict-panel" role="alert">
-                  <h3>Link changed elsewhere</h3>
-                  <p>
+                <section
+                  className="rounded-lg border border-warning bg-warning-soft p-4"
+                  role="alert"
+                >
+                  <h3 className="font-semibold">Link changed elsewhere</h3>
+                  <p className="mt-2 text-sm">
                     Your values are preserved. Compare them with the current Link before deciding
                     what to keep.
                   </p>
-                  <div className="conflict-comparison">
-                    {titleDraft !== conflict.title && (
-                      <div>
-                        <span>Current Title</span>
+                  <div className="mt-4 grid gap-3">
+                    {drafts.title !== conflict.title && (
+                      <div className="grid gap-1">
+                        <span className="text-xs text-muted-foreground">Current Title</span>
                         <strong>{conflict.title}</strong>
-                        <span>Your Title</span>
-                        <strong>{titleDraft}</strong>
+                        <span className="text-xs text-muted-foreground">Your Title</span>
+                        <strong>{drafts.title}</strong>
                       </div>
                     )}
-                    {destinationDraft !== conflict.destination.url && (
-                      <div>
-                        <span>Current Destination</span>
+                    {drafts.destination !== conflict.destination.url && (
+                      <div className="grid gap-1">
+                        <span className="text-xs text-muted-foreground">Current Destination</span>
                         <code>{conflict.destination.url}</code>
-                        <span>Your Destination</span>
-                        <code>{destinationDraft}</code>
+                        <span className="text-xs text-muted-foreground">Your Destination</span>
+                        <code>{drafts.destination}</code>
                       </div>
                     )}
                   </div>
-                  <div className="form-actions">
+                  <div className="mt-4 flex flex-wrap justify-end gap-3">
                     <Button type="button" variant="secondary" onClick={reviewChanges}>
                       Review changes
                     </Button>
-                    <Button type="button" variant="quiet" onClick={discardMine}>
+                    <Button type="button" variant="ghost" onClick={discardMine}>
                       Discard mine
                     </Button>
                   </div>
                 </section>
               )}
-              <div className="field">
-                <label htmlFor="edit-title">Title</label>
-                <input
-                  required
-                  id="edit-title"
-                  value={titleDraft}
-                  maxLength={200}
-                  onChange={(event) => setTitleDraft(event.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="edit-destination">Destination</label>
-                <input
-                  required
-                  id="edit-destination"
-                  type="url"
-                  value={destinationDraft}
-                  onChange={(event) => setDestinationDraft(event.target.value)}
-                />
-              </div>
-              <p className="form-note">
+              <form.AppField name="title">
+                {(field) => <field.TextField label="Title" maxLength={200} />}
+              </form.AppField>
+              <form.AppField name="destination">
+                {(field) => <field.TextField label="Destination" type="url" />}
+              </form.AppField>
+              <p className="text-xs text-muted-foreground">
                 Alias <code>{link.data.link.alias}</code> is the stable identity and cannot be
                 edited.
               </p>
               {edit.isError &&
                 (!(edit.error instanceof ApiError) || edit.error.body.kind !== "link-conflict") && (
-                  <p className="field-error">{linkMutationError(edit.error)}</p>
+                  <p className="text-sm text-destructive" role="alert">
+                    {linkMutationError(edit.error)}
+                  </p>
                 )}
-              <div className="form-actions">
+              <div className="flex flex-wrap justify-end gap-3">
                 <Button type="button" variant="secondary" onClick={discardMine}>
                   Cancel
                 </Button>
-                <Button type="submit" disabled={edit.isPending}>
-                  {edit.isPending ? "Saving…" : "Save changes"}
-                </Button>
+                <form.AppForm>
+                  <form.SubmitButton pendingLabel="Saving…">Save changes</form.SubmitButton>
+                </form.AppForm>
               </div>
             </form>
           ) : (
             <>
-              <section className="detail-section">
-                <h3>Identity</h3>
-                <dl>
-                  <div>
-                    <dt>Short URL</dt>
-                    <dd>
+              <section className="border-t py-5">
+                <h3 className="mb-3 text-sm font-semibold">Identity</h3>
+                <dl className="grid gap-3">
+                  <div className="grid gap-1 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4">
+                    <dt className="text-xs text-muted-foreground">Short URL</dt>
+                    <dd className="m-0 break-words">
                       <code>{link.data.link.shortUrl}</code>
                     </dd>
                   </div>
-                  <div>
-                    <dt>Alias</dt>
-                    <dd>
+                  <div className="grid gap-1 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4">
+                    <dt className="text-xs text-muted-foreground">Alias</dt>
+                    <dd className="m-0 break-words">
                       <code>{link.data.link.alias}</code>
                     </dd>
                   </div>
                 </dl>
               </section>
-              <section className="detail-section">
-                <h3>Current Destination</h3>
-                <a href={link.data.link.destination.url} target="_blank" rel="noreferrer">
+              <section className="border-t py-5">
+                <h3 className="mb-3 text-sm font-semibold">Current Destination</h3>
+                <a
+                  className="break-words text-primary hover:underline"
+                  href={link.data.link.destination.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {link.data.link.destination.url}
                 </a>
               </section>
-              <section className="detail-section">
-                <h3>Destination Versions</h3>
+              <section className="border-t py-5">
+                <h3 className="mb-3 text-sm font-semibold">Destination Versions</h3>
                 {versions.isPending && <p>Loading versions…</p>}
                 {versions.data?.pages.flatMap((page) => page.items).length === 0 && (
                   <p>Earlier Destination Versions will appear here after the first edit.</p>
@@ -284,9 +303,9 @@ export function LinkDetailPanel() {
                 {versions.data?.pages
                   .flatMap((page) => page.items)
                   .map((version) => (
-                    <div className="version-row" key={version.id}>
+                    <div className="grid gap-1 py-3" key={version.id}>
                       <strong>Version {version.versionNumber}</strong>
-                      <span>{version.url}</span>
+                      <span className="truncate text-xs text-muted-foreground">{version.url}</span>
                     </div>
                   ))}
                 {versions.hasNextPage && (
@@ -300,17 +319,19 @@ export function LinkDetailPanel() {
                 )}
               </section>
               {session.user.role !== "viewer" && (
-                <section className="detail-section">
-                  <h3>Link state</h3>
+                <section className="border-t py-5">
+                  <h3 className="mb-3 text-sm font-semibold">Link state</h3>
                   {notice && (
-                    <p className="success" role="status">
+                    <p className="text-sm text-success" role="status">
                       {notice}
                     </p>
                   )}
                   {stateChange.isError && (
-                    <p className="field-error">The Link state could not be changed.</p>
+                    <p className="text-sm text-destructive" role="alert">
+                      The Link state could not be changed.
+                    </p>
                   )}
-                  <div className="form-actions">
+                  <div className="flex flex-wrap justify-end gap-3">
                     {link.data.link.state === "active" && (
                       <>
                         <Button variant="secondary" onClick={() => stateChange.mutate("disable")}>
@@ -335,7 +356,7 @@ export function LinkDetailPanel() {
                       <>
                         <Button onClick={() => stateChange.mutate("restore")}>Restore Link</Button>
                         {session.user.role === "administrator" && (
-                          <Button variant="danger" onClick={() => setDeleting(true)}>
+                          <Button variant="destructive" onClick={() => setDeleting(true)}>
                             <Trash2 aria-hidden="true" size={16} strokeWidth={1.75} />
                             Permanently delete
                           </Button>
