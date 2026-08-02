@@ -1,0 +1,46 @@
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  padding: 1.25rem;
+  place-items: center;
+}
+
+.auth-panel {
+  width: min(28rem, 100%);
+  padding: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface);
+}
+
+.auth-panel form,
+.auth-panel label {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.auth-panel form {
+  gap: 1rem;
+}
+
+.brand-label {
+  margin-bottom: 0.5rem;
+  color: var(--flare);
+  font-weight: 700;
+}
+
+.field-success {
+  color: var(--success);
+}
+
+.text-link {
+  color: var(--flare);
+  text-align: center;
+}
+
+.theme-field {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}

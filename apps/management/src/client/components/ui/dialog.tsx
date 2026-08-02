@@ -1,8 +1,10 @@
-/* oxlint-disable react-perf/jsx-no-jsx-as-prop -- Base UI's render prop is the supported composition seam. */
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import type { ReactNode } from "react";
 
 import { Button } from "./button";
+
+// Base UI composes this source-owned Button through its render seam.
+const dialogCloseButton = <Button type="button" variant="quiet" className="dialog-close" />;
 
 export function Dialog({
   open,
@@ -25,10 +27,7 @@ export function Dialog({
           <DialogPrimitive.Popup className="dialog-popup">
             <DialogPrimitive.Title>{title}</DialogPrimitive.Title>
             <DialogPrimitive.Description>{description}</DialogPrimitive.Description>
-            <DialogPrimitive.Close
-              autoFocus
-              render={<Button type="button" variant="quiet" className="dialog-close" />}
-            >
+            <DialogPrimitive.Close autoFocus render={dialogCloseButton}>
               Cancel
             </DialogPrimitive.Close>
             {children}

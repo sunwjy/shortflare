@@ -1,4 +1,4 @@
-/* oxlint-disable import/no-unassigned-import -- Extends Vitest's expect matchers globally. */
+// oxlint-disable-next-line import/no-unassigned-import -- This module extends Vitest's expect matchers by import side effect.
 import "@testing-library/jest-dom/vitest";
 
 import { cleanup } from "@testing-library/react";

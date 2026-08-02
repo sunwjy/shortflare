@@ -1,10 +1,10 @@
-/* oxlint-disable react-perf/jsx-no-new-function-as-prop -- Authentication form handlers are intentionally local to each screen. */
 import { type FormEvent, useState } from "react";
 
-import { apiRequest, ApiError } from "./api";
+import { ApiError, jsonRequest } from "./api";
+import { identityUserResponseSchema, sessionResponseSchema } from "./api-schemas";
 import { Button } from "./components/ui/button";
 import type { Theme } from "./theme";
-import type { Session, TokenRoute, User } from "./types";
+import type { Session, TokenRoute } from "./types";
 
 type ThemeProps = Readonly<{ theme: Theme; onTheme: (theme: Theme) => void }>;
 
@@ -21,10 +21,10 @@ export function LoginScreen({
     event.preventDefault();
     setError("");
     try {
-      const response = await apiRequest<{ ok: true; user: User; csrfToken: string }>(
-        "/api/internal/auth/login",
-        { method: "POST", body: { email, password } },
-      );
+      const response = await jsonRequest("/api/internal/auth/login", sessionResponseSchema, {
+        method: "POST",
+        body: { email, password },
+      });
       onLogin({ user: response.user, csrfToken: response.csrfToken });
     } catch {
       setError("Email or password is invalid.");
@@ -91,7 +91,7 @@ export function TokenPasswordScreen({
       return;
     }
     try {
-      await apiRequest(route.endpoint, {
+      await jsonRequest(route.endpoint, identityUserResponseSchema, {
         method: "POST",
         body: { token: route.token, password },
       });

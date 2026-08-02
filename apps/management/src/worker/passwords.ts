@@ -9,6 +9,8 @@ type ScryptPolicy = Readonly<{
   maxmem: number;
 }>;
 
+// ADR-0003 fixes the current cost and requires a whitelist for legacy
+// verifiers, so stored parameters can never select arbitrary KDF work factors.
 const currentPolicy: ScryptPolicy = {
   N: 32_768,
   r: 8,

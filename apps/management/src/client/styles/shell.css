@@ -1,0 +1,136 @@
+.app-shell {
+  display: grid;
+  grid-template-columns: 13.5rem minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.navigation-rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 1.25rem 1rem;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.wordmark,
+.navigation-rail nav a,
+.user-summary a {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.wordmark {
+  margin: 0.15rem 0.5rem 2rem;
+}
+
+.wordmark > span {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 7px;
+  color: #fff;
+  background: var(--flare);
+  font-weight: 800;
+}
+
+.navigation-rail nav {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.navigation-rail nav a,
+.user-summary a {
+  min-height: 2.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 7px;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.navigation-rail nav a:hover,
+.navigation-rail nav a[aria-current="page"],
+.user-summary a:hover,
+.user-summary a[aria-current="page"] {
+  background: var(--flare-soft);
+}
+
+.user-summary {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.user-menu {
+  position: relative;
+}
+
+.user-menu summary {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.6rem 0.5rem;
+  border-radius: 7px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.user-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.user-menu summary:hover {
+  background: var(--surface-subtle);
+}
+
+.user-menu__popup {
+  position: absolute;
+  z-index: 25;
+  inset: auto 0 calc(100% + 0.5rem);
+  display: grid;
+  gap: 0.25rem;
+  min-width: 12rem;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-strong);
+  box-shadow: 0 0.5rem 1.5rem rgb(17 22 20 / 16%);
+}
+
+.mobile-menu-trigger {
+  display: none;
+}
+
+.user-summary > span {
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.user-summary small,
+.field > span,
+.form-note {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+}
+
+.user-summary label {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+}
+
+.work-area {
+  width: min(76rem, 100%);
+  margin: 0 auto;
+  padding: 3rem clamp(1.25rem, 4vw, 4rem);
+}

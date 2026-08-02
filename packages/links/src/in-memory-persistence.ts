@@ -1,4 +1,5 @@
-import type { Link, LinksPersistence, ReservedAlias } from "./types";
+import type { LinksPersistence } from "./persistence";
+import type { Link, ReservedAlias } from "./types";
 import {
   encodeDestinationVersionCursor,
   encodeListCursor,

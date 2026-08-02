@@ -1,4 +1,5 @@
-import { createInMemoryLinksPersistence, createLinks } from "../src/index";
+import { createInMemoryLinksPersistence } from "../src/in-memory-persistence";
+import { createLinks } from "../src/index";
 import { linksContract } from "./contract";
 
 linksContract((overrides = {}) => {
