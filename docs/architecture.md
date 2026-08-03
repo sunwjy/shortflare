@@ -357,15 +357,18 @@ larger interface.
 
 ### Management-only modules
 
-Authentication, Users, roles, sessions, audit browsing, and Instance settings
-remain inside `apps/management`. They have one runtime caller and one D1
-implementation, so separate workspace packages or hypothetical external seams
-would add indirection without leverage. Tests use local D1 as a substitutable
-dependency. The deployment CLI has one narrow provisioning exception: before
-the first Administrator exists, it may write the singleton `initial_setup`
-handoff record; for Operator Recovery, it may write the singleton
-`operator_recovery` handoff. It never writes User, credential, Session, or
-audit records.
+Identity, access control, audit browsing, and Instance settings remain inside
+`apps/management`. They have one runtime caller, so separate workspace packages
+or hypothetical external seams would add indirection without leverage. Identity
+owns Initial Setup, Sessions, Invitations, Users, Password Resets, and Operator
+Recovery as facets of one interface rather than flattening every method or
+splitting Authentication and Users into unrelated top-level modules. Tests use
+local D1 as a substitutable dependency.
+
+The deployment CLI has one narrow provisioning exception: before the first
+Administrator exists, it may write the singleton `initial_setup` handoff record;
+for Operator Recovery, it may write the singleton `operator_recovery` handoff.
+It never writes User, credential, Session, or audit records.
 
 Hono and React are adapters:
 
@@ -375,6 +378,62 @@ Hono and React are adapters:
 - The later public REST surface lives under `/api/v1/*` and calls the same
   module interfaces.
 - Transport schemas and generated Hono client types do not become domain types.
+
+### Management backend composition
+
+The Management backend is a capability-first modular monolith with a functional
+application core and Hono and D1 adapters. `worker/index.ts` exports the
+production app; `worker/app.ts` is the only composition root and creates it from
+explicit dependencies. No route or shared transport helper constructs a D1
+adapter or the production Identity module.
+
+The composition root knows the complete graph. Each Hono sub-app receives only
+the factories and ports it needs, never a generic container or the complete
+dependency object. Hono Variables hold narrow request results such as the
+authenticated Actor and Session state, not `services` or module instances.
+
+Each capability exposes one chainable Hono sub-app. Handlers normally stay
+beside route declarations for Hono type inference; route files split only when
+independently changing HTTP resources justify it. Links groups Link and
+Destination Version routes separately from Reserved Alias routes. Identity
+groups authentication routes separately from User routes but retains one
+application module.
+
+Shared `transport` code is limited to policy used by at least two capability
+adapters: typed Hono construction, request integrity, authentication middleware,
+cookies, security headers, JSON validation mechanics, and unexpected-error
+handling. Capability schemas, strict query parsing, presenters, and expected
+result-to-HTTP mapping stay with their owning capability. A shared `utils` module
+is not a destination for unrelated helpers.
+
+The pure Management-local `access-control` module owns the complete Capability
+union and role-to-capability mapping. It may depend on public Actor and role
+types, but it does not import Hono, D1, cookies, or Identity internals. Atomic
+rules that depend on stored state, such as preserving one Active Administrator,
+remain in the owning application module.
+
+Shared transport owns a narrow `RequestAuthentication` port. The production
+composition root adapts the Identity Sessions facet to it, while HTTP tests use
+a fake adapter. Links HTTP therefore depends on shared transport rather than on
+Identity or its HTTP adapter. Authentication behavior uses purpose-named
+middleware and failure presenters rather than Boolean control flags or a
+service locator.
+
+Expected application failures remain discriminated results and are mapped by
+the owning capability HTTP adapter. Request-integrity, authentication, CSRF, and
+Capability failures are mapped by shared transport. Only unexpected failures
+reach the top-level `app.onError()`, which records them once and returns the
+generic internal error. Application modules never return `Response` or import
+Hono exceptions.
+
+Dependencies point inward:
+
+- the composition root may import all production adapters;
+- HTTP adapters import public application interfaces and shared transport;
+- application modules do not import Hono, D1, cookies, or transport DTOs;
+- persistence adapters implement ports owned by application modules;
+- modules use public entrypoints rather than deep imports; and
+- re-exports must not hide circular dependencies.
 
 ## Data model
 
@@ -483,6 +542,18 @@ endpoint.
   require the exact Management Origin and `application/json`; HTML form bodies
   and requests from the Redirect origin are rejected. A future `/api/v1/*`
   public API defines its own authentication and CORS boundary.
+- Authenticated mutations enforce this order before any application call:
+  request integrity, Session and CSRF authentication, Capability authorization,
+  transport validation, and then any required recent-authentication check.
+  Public Setup, login, Invitation acceptance, Password Reset use, and Operator
+  Recovery use omit Session, CSRF, and Capability checks but still enforce
+  request integrity before validation.
+- When one request violates multiple authenticated-mutation requirements, the
+  response precedence is request integrity `403`, authentication `401`,
+  authorization `403`, validation `400`, and recent authentication `403`. A
+  requirement derived from a validated body, such as recent authentication for
+  an Administrator Invitation, runs after validation but before the application
+  command.
 - Each authenticated request resolves the current Session, User state, and role
   from D1. A centralized role-to-capability mapping runs in the Hono adapter
   before any module call; authenticated but unauthorized requests return `403`,
@@ -557,12 +628,16 @@ shortflare/
 │       │   │   └── routeTree.gen.ts
 │       │   └── worker/
 │       │       ├── index.ts
-│       │       ├── http/
-│       │       │   ├── internal/
-│       │       │   └── v1/
+│       │       ├── app.ts
+│       │       ├── access-control/
+│       │       ├── transport/
 │       │       └── modules/
-│       │           ├── auth/
-│       │           ├── users/
+│       │           ├── links/
+│       │           │   └── http/
+│       │           ├── identity/
+│       │           │   ├── application/
+│       │           │   ├── adapters/d1/
+│       │           │   └── http/
 │       │           ├── audit/
 │       │           └── instance-settings/
 │       ├── test/
@@ -677,17 +752,21 @@ requires separate confirmation.
 
 ## Testing and verification
 
-MVP verification has three layers:
+Verification has three observable layers:
 
-1. Links and Analytics behavior tests cross their module interfaces with
-   in-memory adapters. Tests assert decisions and results, not implementation
-   internals.
-2. D1 adapter contract and migration tests run against the local Workers/D1
-   runtime and reuse the same behavioral cases.
-3. Worker request tests cover routing, cookies, role enforcement, cache behavior,
-   Queue emission, and failure isolation.
+1. Application behavior tests cross Links, Analytics, and Identity interfaces.
+   Persistence contracts reuse behavioral cases against in-memory and local D1
+   adapters. Tests assert decisions and results, not private helpers.
+2. Capability HTTP tests call each injected Hono sub-app with `app.request()` and
+   cover transport validation, authentication results, DTOs, and expected error
+   mapping without constructing Hono Context objects directly.
+3. Full Worker request tests use the production composition shape and local D1
+   to cover routing, middleware order, cookies, CSRF, Origin, Capability and
+   recent-authentication enforcement, cache behavior, Queue emission, and
+   failure isolation.
 
-Browser end-to-end tests are added after the core UI stabilizes. A deployment
+Management backend changes additionally exercise the authenticated browser flows
+for login, Links, and Users and require a clean browser console. A deployment
 smoke test against a dedicated Cloudflare account follows once the CLI is safe
 and idempotent.
 
