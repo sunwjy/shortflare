@@ -11,85 +11,82 @@ import type {
   PersistenceListQuery,
   PersistenceReservedAliasQuery,
 } from "@shortflare/links/persistence";
+import { and, asc, desc, eq, inArray, isNull, lt, max, or, sql } from "drizzle-orm";
+import { alias as tableAlias } from "drizzle-orm/sqlite-core";
 
-import {
-  assertAlias,
-  hydrateDestinationVersion,
-  hydrateSummary,
-  type DestinationVersionRow,
-  type LinkSummarySqlRow,
-} from "./d1-links-records";
+import { databaseSchema, type ShortflareDatabase } from "../d1";
+import { assertAlias, hydrateDestinationVersion, hydrateSummary } from "./d1-links-records";
 
 export async function listLinks(
-  database: D1Database,
+  database: ShortflareDatabase,
   query: PersistenceListQuery,
 ): Promise<LinkPage> {
   if (query.states.length === 0) {
     return { items: [], nextCursor: null };
   }
 
-  const statePlaceholders = query.states.map(() => "?").join(", ");
+  const latest = tableAlias(databaseSchema.destinationVersions, "latest");
+  const latestVersionNumber = database
+    .select({ value: max(latest.versionNumber) })
+    .from(latest)
+    .where(eq(latest.linkId, databaseSchema.links.id));
   // The seek predicate must mirror the immutable ORDER BY exactly; using
-  // updated_at or reversing the ID tie-breaker would skip or duplicate rows.
-  const cursorSql =
+  // updatedAt or reversing the ID tie-breaker would skip or duplicate rows.
+  const seek =
     query.cursor === undefined
-      ? ""
-      : `AND (
-           l.created_at < ?
-           OR (l.created_at = ? AND l.id > ?)
-         )`;
-  const result = await database
-    .prepare(
-      `SELECT
-         l.id,
-         a.alias,
-         l.title,
-         l.state,
-         l.revision,
-         l.created_at AS createdAt,
-         l.updated_at AS updatedAt,
-         dv.id AS destinationVersionId,
-         dv.destination,
-         dv.version_number AS versionNumber,
-         dv.created_at AS destinationCreatedAt
-       FROM links l
-       JOIN aliases a ON a.link_id = l.id
-       JOIN destination_versions dv
-         ON dv.link_id = l.id
-        AND dv.version_number = (
-          SELECT MAX(latest.version_number)
-          FROM destination_versions latest
-          WHERE latest.link_id = l.id
-        )
-       WHERE l.state IN (${statePlaceholders})
-         AND (
-           ? = ''
-           OR instr(a.search_alias, ?) > 0
-           OR instr(l.search_title, ?) > 0
-         )
-         ${cursorSql}
-       ORDER BY l.created_at DESC, l.id ASC
-       LIMIT ?`,
+      ? undefined
+      : or(
+          lt(databaseSchema.links.createdAt, query.cursor.createdAt),
+          and(
+            eq(databaseSchema.links.createdAt, query.cursor.createdAt),
+            sql`${databaseSchema.links.id} > ${query.cursor.id}`,
+          ),
+        );
+  const rows = await database
+    .select({
+      id: databaseSchema.links.id,
+      alias: databaseSchema.aliases.alias,
+      title: databaseSchema.links.title,
+      state: databaseSchema.links.state,
+      revision: databaseSchema.links.revision,
+      createdAt: databaseSchema.links.createdAt,
+      updatedAt: databaseSchema.links.updatedAt,
+      destinationVersionId: databaseSchema.destinationVersions.id,
+      destination: databaseSchema.destinationVersions.destination,
+      versionNumber: databaseSchema.destinationVersions.versionNumber,
+      destinationCreatedAt: databaseSchema.destinationVersions.createdAt,
+    })
+    .from(databaseSchema.links)
+    .innerJoin(databaseSchema.aliases, eq(databaseSchema.aliases.linkId, databaseSchema.links.id))
+    .innerJoin(
+      databaseSchema.destinationVersions,
+      and(
+        eq(databaseSchema.destinationVersions.linkId, databaseSchema.links.id),
+        sql`${databaseSchema.destinationVersions.versionNumber} = (${latestVersionNumber})`,
+      ),
     )
-    .bind(
-      ...query.states,
-      query.search,
-      query.search,
-      query.search,
-      ...(query.cursor === undefined
-        ? []
-        : [query.cursor.createdAt.getTime(), query.cursor.createdAt.getTime(), query.cursor.id]),
-      query.limit + 1,
+    .where(
+      and(
+        inArray(databaseSchema.links.state, [...query.states]),
+        query.search === ""
+          ? undefined
+          : or(
+              sql`instr(${databaseSchema.aliases.searchAlias}, ${query.search}) > 0`,
+              sql`instr(${databaseSchema.links.searchTitle}, ${query.search}) > 0`,
+            ),
+        seek,
+      ),
     )
-    .all<LinkSummarySqlRow>();
-  const pageRows = result.results.slice(0, query.limit);
+    .orderBy(desc(databaseSchema.links.createdAt), asc(databaseSchema.links.id))
+    .limit(query.limit + 1);
+  const pageRows = rows.slice(0, query.limit);
   const items = pageRows.map(hydrateSummary);
   const lastItem = items.at(-1);
 
   return {
     items,
     nextCursor:
-      result.results.length > query.limit && lastItem !== undefined
+      rows.length > query.limit && lastItem !== undefined
         ? encodeListCursor(query.search, query.states, {
             createdAt: lastItem.createdAt,
             id: lastItem.id,
@@ -99,94 +96,101 @@ export async function listLinks(
 }
 
 export async function listDestinationVersions(
-  database: D1Database,
+  database: ShortflareDatabase,
   linkId: string,
   query: PersistenceDestinationVersionQuery,
 ): Promise<DestinationVersionPage | null> {
-  const exists = await database
-    .prepare(
-      `SELECT MAX(dv.version_number) AS currentVersionNumber
-       FROM links l
-       JOIN destination_versions dv ON dv.link_id = l.id
-       WHERE l.id = ?
-       GROUP BY l.id`,
+  const existing = await database
+    .select({ currentVersionNumber: max(databaseSchema.destinationVersions.versionNumber) })
+    .from(databaseSchema.links)
+    .innerJoin(
+      databaseSchema.destinationVersions,
+      eq(databaseSchema.destinationVersions.linkId, databaseSchema.links.id),
     )
-    .bind(linkId)
-    .first<{ currentVersionNumber: number }>();
-  if (exists === null) return null;
+    .where(eq(databaseSchema.links.id, linkId))
+    .groupBy(databaseSchema.links.id)
+    .limit(1);
+  const currentVersionNumber = existing[0]?.currentVersionNumber;
+  if (currentVersionNumber === undefined || currentVersionNumber === null) return null;
 
-  const result = await database
-    .prepare(
-      `SELECT
-         id,
-         destination,
-         version_number AS versionNumber,
-         created_at AS createdAt
-       FROM destination_versions
-       WHERE link_id = ?
-         AND (? IS NULL OR version_number < ?)
-       ORDER BY version_number DESC
-       LIMIT ?`,
+  const rows = await database
+    .select({
+      id: databaseSchema.destinationVersions.id,
+      destination: databaseSchema.destinationVersions.destination,
+      versionNumber: databaseSchema.destinationVersions.versionNumber,
+      createdAt: databaseSchema.destinationVersions.createdAt,
+    })
+    .from(databaseSchema.destinationVersions)
+    .where(
+      and(
+        eq(databaseSchema.destinationVersions.linkId, linkId),
+        query.cursor === undefined
+          ? undefined
+          : lt(databaseSchema.destinationVersions.versionNumber, query.cursor.versionNumber),
+      ),
     )
-    .bind(
-      linkId,
-      query.cursor?.versionNumber ?? null,
-      query.cursor?.versionNumber ?? null,
-      query.limit + 1,
-    )
-    .all<DestinationVersionRow>();
-  const items = result.results.slice(0, query.limit).map(hydrateDestinationVersion);
+    .orderBy(desc(databaseSchema.destinationVersions.versionNumber))
+    .limit(query.limit + 1);
+  const items = rows.slice(0, query.limit).map(hydrateDestinationVersion);
   const lastItem = items.at(-1);
   return {
     items,
-    currentVersionNumber: exists.currentVersionNumber,
+    currentVersionNumber,
     nextCursor:
-      result.results.length > query.limit && lastItem !== undefined
+      rows.length > query.limit && lastItem !== undefined
         ? encodeDestinationVersionCursor(linkId, lastItem.versionNumber)
         : null,
   };
 }
 
 export async function listReservedAliases(
-  database: D1Database,
+  database: ShortflareDatabase,
   query: PersistenceReservedAliasQuery,
 ): Promise<ReservedAliasPage> {
-  const result = await database
-    .prepare(
-      `SELECT
-         alias,
-         deleted_link_id AS deletedLinkId,
-         reserved_at AS reservedAt
-       FROM aliases
-       WHERE link_id IS NULL
-         AND instr(search_alias, ?) > 0
-         AND (
-           ? IS NULL
-           OR reserved_at < ?
-           OR (reserved_at = ? AND alias > ? COLLATE BINARY)
-         )
-       ORDER BY reserved_at DESC, alias COLLATE BINARY ASC
-       LIMIT ?`,
+  const seek =
+    query.cursor === undefined
+      ? undefined
+      : or(
+          lt(databaseSchema.aliases.reservedAt, query.cursor.reservedAt),
+          and(
+            eq(databaseSchema.aliases.reservedAt, query.cursor.reservedAt),
+            sql`${databaseSchema.aliases.alias} > ${query.cursor.alias} COLLATE BINARY`,
+          ),
+        );
+  const rows = await database
+    .select({
+      alias: databaseSchema.aliases.alias,
+      deletedLinkId: databaseSchema.aliases.deletedLinkId,
+      reservedAt: databaseSchema.aliases.reservedAt,
+    })
+    .from(databaseSchema.aliases)
+    .where(
+      and(
+        isNull(databaseSchema.aliases.linkId),
+        sql`instr(${databaseSchema.aliases.searchAlias}, ${query.search}) > 0`,
+        seek,
+      ),
     )
-    .bind(
-      query.search,
-      query.cursor?.reservedAt.getTime() ?? null,
-      query.cursor?.reservedAt.getTime() ?? null,
-      query.cursor?.reservedAt.getTime() ?? null,
-      query.cursor?.alias ?? null,
-      query.limit + 1,
+    .orderBy(
+      desc(databaseSchema.aliases.reservedAt),
+      asc(sql`${databaseSchema.aliases.alias} COLLATE BINARY`),
     )
-    .all<{ alias: string; deletedLinkId: string; reservedAt: number }>();
-  const items = result.results.slice(0, query.limit).map((row) => ({
-    alias: assertAlias(row.alias),
-    deletedLinkId: row.deletedLinkId,
-    reservedAt: new Date(row.reservedAt),
-  }));
+    .limit(query.limit + 1);
+  const items = rows.slice(0, query.limit).map((row) => {
+    if (row.deletedLinkId === null || row.reservedAt === null) {
+      throw new Error(`Reserved Alias ${row.alias} is incomplete`);
+    }
+    return {
+      alias: assertAlias(row.alias),
+      deletedLinkId: row.deletedLinkId,
+      reservedAt: row.reservedAt,
+    };
+  });
   const lastItem = items.at(-1);
   return {
     items,
     nextCursor:
-      result.results.length > query.limit && lastItem !== undefined
+      rows.length > query.limit && lastItem !== undefined
         ? encodeReservedAliasCursor(query.search, {
             reservedAt: lastItem.reservedAt,
             alias: lastItem.alias,

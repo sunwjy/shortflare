@@ -1,3 +1,6 @@
+import { databaseSchema, type ShortflareDatabase } from "@shortflare/database/d1";
+import { and, eq, gt, sql } from "drizzle-orm";
+
 import type {
   CredentialUser,
   OpenedSession,
@@ -5,178 +8,241 @@ import type {
   RequestSession,
   SessionPersistence,
 } from "../../application/sessions";
-import type { User } from "../../application/shared";
+import { changed, first, toDate, userSelection } from "./shared";
 
-export function createD1SessionPersistence(database: D1Database): SessionPersistence {
+export function createD1SessionPersistence(database: ShortflareDatabase): SessionPersistence {
   return {
-    findCredentialByEmail(normalizedEmail) {
-      return database
-        .prepare(
-          `SELECT users.id, users.display_email AS email, users.role, users.state,
-                  credentials.verifier
-           FROM users
-           LEFT JOIN credentials ON credentials.user_id = users.id
-           WHERE users.normalized_email = ?`,
-        )
-        .bind(normalizedEmail)
-        .first<CredentialUser>();
+    async findCredentialByEmail(normalizedEmail) {
+      return first(
+        await database
+          .select({ ...userSelection, verifier: databaseSchema.credentials.verifier })
+          .from(databaseSchema.users)
+          .leftJoin(
+            databaseSchema.credentials,
+            eq(databaseSchema.credentials.userId, databaseSchema.users.id),
+          )
+          .where(eq(databaseSchema.users.normalizedEmail, normalizedEmail))
+          .limit(1),
+      ) satisfies CredentialUser | null;
     },
     async updateVerifier(userId, verifier, occurredAt) {
       await database
-        .prepare("UPDATE credentials SET verifier = ?, updated_at = ? WHERE user_id = ?")
-        .bind(verifier, occurredAt, userId)
-        .run();
+        .update(databaseSchema.credentials)
+        .set({ verifier, updatedAt: toDate(occurredAt) })
+        .where(eq(databaseSchema.credentials.userId, userId));
     },
     async create(input) {
-      await database
-        .prepare(
-          `INSERT INTO sessions
-             (id, user_id, token_hash, csrf_token, created_at, last_seen_at,
-              idle_expires_at, absolute_expires_at, recent_authentication_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          input.sessionId,
-          input.userId,
-          input.tokenHash,
-          input.csrfToken,
-          input.occurredAt,
-          input.occurredAt,
-          input.idleExpiresAt,
-          input.absoluteExpiresAt,
-          input.occurredAt,
-        )
-        .run();
+      await database.insert(databaseSchema.sessions).values({
+        id: input.sessionId,
+        userId: input.userId,
+        tokenHash: input.tokenHash,
+        csrfToken: input.csrfToken,
+        createdAt: toDate(input.occurredAt),
+        lastSeenAt: toDate(input.occurredAt),
+        idleExpiresAt: toDate(input.idleExpiresAt),
+        absoluteExpiresAt: toDate(input.absoluteExpiresAt),
+        recentAuthenticationAt: toDate(input.occurredAt),
+      });
     },
-    findActiveUser(tokenHash, occurredAt) {
-      return database
-        .prepare(
-          `SELECT users.id, users.display_email AS email, users.role, users.state
-           FROM sessions
-           INNER JOIN users ON users.id = sessions.user_id
-           WHERE sessions.token_hash = ?
-             AND sessions.idle_expires_at > ?
-             AND sessions.absolute_expires_at > ?
-             AND users.state = 'active'`,
-        )
-        .bind(tokenHash, occurredAt, occurredAt)
-        .first<User>();
+    async findActiveUser(tokenHash, occurredAt) {
+      return first(
+        await database
+          .select(userSelection)
+          .from(databaseSchema.sessions)
+          .innerJoin(
+            databaseSchema.users,
+            eq(databaseSchema.users.id, databaseSchema.sessions.userId),
+          )
+          .where(
+            and(
+              eq(databaseSchema.sessions.tokenHash, tokenHash),
+              gt(databaseSchema.sessions.idleExpiresAt, toDate(occurredAt)),
+              gt(databaseSchema.sessions.absoluteExpiresAt, toDate(occurredAt)),
+              eq(databaseSchema.users.state, "active"),
+            ),
+          )
+          .limit(1),
+      );
     },
-    findRequest(tokenHash, occurredAt) {
-      return database
-        .prepare(
-          `SELECT users.id, users.display_email AS email, users.role, users.state,
-                  sessions.csrf_token AS csrfToken,
-                  sessions.last_seen_at AS lastSeenAt,
-                  sessions.absolute_expires_at AS absoluteExpiresAt,
-                  sessions.recent_authentication_at AS recentAuthenticationAt
-           FROM sessions
-           INNER JOIN users ON users.id = sessions.user_id
-           WHERE sessions.token_hash = ?
-             AND sessions.idle_expires_at > ?
-             AND sessions.absolute_expires_at > ?
-             AND users.state = 'active'`,
-        )
-        .bind(tokenHash, occurredAt, occurredAt)
-        .first<RequestSession>();
+    async findRequest(tokenHash, occurredAt) {
+      const row = first(
+        await database
+          .select({
+            ...userSelection,
+            csrfToken: databaseSchema.sessions.csrfToken,
+            lastSeenAt: databaseSchema.sessions.lastSeenAt,
+            absoluteExpiresAt: databaseSchema.sessions.absoluteExpiresAt,
+            recentAuthenticationAt: databaseSchema.sessions.recentAuthenticationAt,
+          })
+          .from(databaseSchema.sessions)
+          .innerJoin(
+            databaseSchema.users,
+            eq(databaseSchema.users.id, databaseSchema.sessions.userId),
+          )
+          .where(
+            and(
+              eq(databaseSchema.sessions.tokenHash, tokenHash),
+              gt(databaseSchema.sessions.idleExpiresAt, toDate(occurredAt)),
+              gt(databaseSchema.sessions.absoluteExpiresAt, toDate(occurredAt)),
+              eq(databaseSchema.users.state, "active"),
+            ),
+          )
+          .limit(1),
+      );
+      return row === null ? null : toRequestSession(row);
     },
     async refresh(input) {
       await database
-        .prepare(
-          `UPDATE sessions SET last_seen_at = ?, idle_expires_at = ?
-           WHERE token_hash = ? AND last_seen_at = ?`,
-        )
-        .bind(input.occurredAt, input.idleExpiresAt, input.tokenHash, input.expectedLastSeenAt)
-        .run();
+        .update(databaseSchema.sessions)
+        .set({
+          lastSeenAt: toDate(input.occurredAt),
+          idleExpiresAt: toDate(input.idleExpiresAt),
+        })
+        .where(
+          and(
+            eq(databaseSchema.sessions.tokenHash, input.tokenHash),
+            eq(databaseSchema.sessions.lastSeenAt, toDate(input.expectedLastSeenAt)),
+          ),
+        );
     },
-    open(tokenHash, occurredAt) {
-      return database
-        .prepare(
-          `SELECT sessions.csrf_token AS csrfToken,
-                  sessions.absolute_expires_at AS absoluteExpiresAt,
-                  users.id, users.display_email AS email, users.role, users.state
-           FROM sessions
-           INNER JOIN users ON users.id = sessions.user_id
-           WHERE sessions.token_hash = ?
-             AND sessions.idle_expires_at > ?
-             AND sessions.absolute_expires_at > ?
-             AND users.state = 'active'`,
-        )
-        .bind(tokenHash, occurredAt, occurredAt)
-        .first<OpenedSession>();
+    async open(tokenHash, occurredAt) {
+      const row = first(
+        await database
+          .select({
+            ...userSelection,
+            csrfToken: databaseSchema.sessions.csrfToken,
+            absoluteExpiresAt: databaseSchema.sessions.absoluteExpiresAt,
+          })
+          .from(databaseSchema.sessions)
+          .innerJoin(
+            databaseSchema.users,
+            eq(databaseSchema.users.id, databaseSchema.sessions.userId),
+          )
+          .where(
+            and(
+              eq(databaseSchema.sessions.tokenHash, tokenHash),
+              gt(databaseSchema.sessions.idleExpiresAt, toDate(occurredAt)),
+              gt(databaseSchema.sessions.absoluteExpiresAt, toDate(occurredAt)),
+              eq(databaseSchema.users.state, "active"),
+            ),
+          )
+          .limit(1),
+      );
+      return row === null
+        ? null
+        : ({ ...row, absoluteExpiresAt: row.absoluteExpiresAt.getTime() } satisfies OpenedSession);
     },
-    findForReauthentication(tokenHash, occurredAt) {
-      return database
-        .prepare(
-          `SELECT sessions.id AS sessionId,
-                  sessions.absolute_expires_at AS absoluteExpiresAt,
-                  users.id, users.display_email AS email, users.role, users.state,
-                  credentials.verifier
-           FROM sessions
-           INNER JOIN users ON users.id = sessions.user_id
-           INNER JOIN credentials ON credentials.user_id = users.id
-           WHERE sessions.token_hash = ?
-             AND sessions.idle_expires_at > ?
-             AND sessions.absolute_expires_at > ?
-             AND users.state = 'active'`,
-        )
-        .bind(tokenHash, occurredAt, occurredAt)
-        .first<ReauthenticationSession>();
+    async findForReauthentication(tokenHash, occurredAt) {
+      const row = first(
+        await database
+          .select({
+            ...userSelection,
+            sessionId: databaseSchema.sessions.id,
+            absoluteExpiresAt: databaseSchema.sessions.absoluteExpiresAt,
+            verifier: databaseSchema.credentials.verifier,
+          })
+          .from(databaseSchema.sessions)
+          .innerJoin(
+            databaseSchema.users,
+            eq(databaseSchema.users.id, databaseSchema.sessions.userId),
+          )
+          .innerJoin(
+            databaseSchema.credentials,
+            eq(databaseSchema.credentials.userId, databaseSchema.users.id),
+          )
+          .where(
+            and(
+              eq(databaseSchema.sessions.tokenHash, tokenHash),
+              gt(databaseSchema.sessions.idleExpiresAt, toDate(occurredAt)),
+              gt(databaseSchema.sessions.absoluteExpiresAt, toDate(occurredAt)),
+              eq(databaseSchema.users.state, "active"),
+            ),
+          )
+          .limit(1),
+      );
+      return row === null
+        ? null
+        : ({
+            ...row,
+            absoluteExpiresAt: row.absoluteExpiresAt.getTime(),
+          } satisfies ReauthenticationSession);
     },
     async rotate(input) {
       await database
-        .prepare(
-          `UPDATE sessions
-           SET token_hash = ?, csrf_token = ?, last_seen_at = ?,
-               idle_expires_at = ?, recent_authentication_at = ?
-           WHERE id = ?`,
-        )
-        .bind(
-          input.tokenHash,
-          input.csrfToken,
-          input.occurredAt,
-          input.idleExpiresAt,
-          input.occurredAt,
-          input.sessionId,
-        )
-        .run();
+        .update(databaseSchema.sessions)
+        .set({
+          tokenHash: input.tokenHash,
+          csrfToken: input.csrfToken,
+          lastSeenAt: toDate(input.occurredAt),
+          idleExpiresAt: toDate(input.idleExpiresAt),
+          recentAuthenticationAt: toDate(input.occurredAt),
+        })
+        .where(eq(databaseSchema.sessions.id, input.sessionId));
     },
-    findCredentialByUserId(userId) {
-      return database
-        .prepare(
-          `SELECT users.id, users.display_email AS email, users.role, users.state,
-                  credentials.verifier
-           FROM users
-           INNER JOIN credentials ON credentials.user_id = users.id
-           WHERE users.id = ? AND users.state = 'active'`,
-        )
-        .bind(userId)
-        .first<User & { verifier: string }>();
+    async findCredentialByUserId(userId) {
+      return first(
+        await database
+          .select({ ...userSelection, verifier: databaseSchema.credentials.verifier })
+          .from(databaseSchema.users)
+          .innerJoin(
+            databaseSchema.credentials,
+            eq(databaseSchema.credentials.userId, databaseSchema.users.id),
+          )
+          .where(and(eq(databaseSchema.users.id, userId), eq(databaseSchema.users.state, "active")))
+          .limit(1),
+      );
     },
     async changePassword(input) {
       // Password replacement, its Audit Event, and revocation of every Session
       // are one D1 transaction, so all existing Sessions are revoked with it.
       const results = await database.batch([
+        database.insert(databaseSchema.auditEvents).select(
+          database
+            .select({
+              id: sql<string>`${input.auditId}`.as("id"),
+              actorId: databaseSchema.users.id,
+              action: sql<"password-change">`${"password-change"}`.as("action"),
+              subjectId: databaseSchema.users.id,
+              occurredAt: sql<Date>`${input.occurredAt}`.as("occurred_at"),
+              metadata: sql<Record<string, never>>`${JSON.stringify({})}`.as("metadata"),
+            })
+            .from(databaseSchema.users)
+            .where(
+              and(
+                eq(databaseSchema.users.id, input.userId),
+                eq(databaseSchema.users.state, "active"),
+              ),
+            ),
+        ),
         database
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, id, 'password-change', id, ?, '{}'
-             FROM users WHERE id = ? AND state = 'active'`,
-          )
-          .bind(input.auditId, input.occurredAt, input.userId),
+          .update(databaseSchema.credentials)
+          .set({ verifier: input.verifier, updatedAt: toDate(input.occurredAt) })
+          .where(eq(databaseSchema.credentials.userId, input.userId)),
         database
-          .prepare(
-            `UPDATE credentials SET verifier = ?, updated_at = ?
-             WHERE user_id = ?`,
-          )
-          .bind(input.verifier, input.occurredAt, input.userId),
-        database.prepare("DELETE FROM sessions WHERE user_id = ?").bind(input.userId),
+          .delete(databaseSchema.sessions)
+          .where(eq(databaseSchema.sessions.userId, input.userId)),
       ]);
-      return (results[1]?.meta.changes ?? 0) > 0;
+      return changed(results, 1);
     },
     async delete(tokenHash) {
-      await database.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(tokenHash).run();
+      await database
+        .delete(databaseSchema.sessions)
+        .where(eq(databaseSchema.sessions.tokenHash, tokenHash));
     },
+  };
+}
+
+function toRequestSession(
+  row: Omit<RequestSession, "absoluteExpiresAt" | "lastSeenAt" | "recentAuthenticationAt"> & {
+    absoluteExpiresAt: Date;
+    lastSeenAt: Date;
+    recentAuthenticationAt: Date;
+  },
+): RequestSession {
+  return {
+    ...row,
+    absoluteExpiresAt: row.absoluteExpiresAt.getTime(),
+    lastSeenAt: row.lastSeenAt.getTime(),
+    recentAuthenticationAt: row.recentAuthenticationAt.getTime(),
   };
 }

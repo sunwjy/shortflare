@@ -1,96 +1,98 @@
-import type { InvitationPersistence } from "../../application/invitations";
-import type { User } from "../../application/shared";
+import { databaseSchema, type ShortflareDatabase } from "@shortflare/database/d1";
+import { and, eq, gt, sql } from "drizzle-orm";
 
-export function createD1InvitationPersistence(database: D1Database): InvitationPersistence {
+import type { InvitationPersistence } from "../../application/invitations";
+import { changed, first, toDate, userSelection } from "./shared";
+
+export function createD1InvitationPersistence(database: ShortflareDatabase): InvitationPersistence {
   return {
-    findUserByNormalizedEmail(normalizedEmail) {
-      return database
-        .prepare(
-          `SELECT id, display_email AS email, role, state
-           FROM users WHERE normalized_email = ?`,
-        )
-        .bind(normalizedEmail)
-        .first<User>();
+    async findUserByNormalizedEmail(normalizedEmail) {
+      return first(
+        await database
+          .select(userSelection)
+          .from(databaseSchema.users)
+          .where(eq(databaseSchema.users.normalizedEmail, normalizedEmail))
+          .limit(1),
+      );
     },
 
     async issue(input) {
       // Issuing replaces any prior token for this Invited User in the same batch
       // that establishes the User state and records the Audit Event.
-      const statements = [
-        input.existing
-          ? database
-              .prepare(
-                `UPDATE users
-                 SET display_email = ?, role = ?, updated_at = ?
-                 WHERE id = ? AND state = 'invited'`,
-              )
-              .bind(input.displayEmail, input.role, input.occurredAt, input.userId)
-          : database
-              .prepare(
-                `INSERT INTO users
-                   (id, display_email, normalized_email, state, role, activated_at, created_at, updated_at)
-                 VALUES (?, ?, ?, 'invited', ?, NULL, ?, ?)`,
-              )
-              .bind(
-                input.userId,
-                input.displayEmail,
-                input.normalizedEmail,
-                input.role,
-                input.occurredAt,
-                input.occurredAt,
+      const userWrite = input.existing
+        ? database
+            .update(databaseSchema.users)
+            .set({
+              displayEmail: input.displayEmail,
+              role: input.role,
+              updatedAt: toDate(input.occurredAt),
+            })
+            .where(
+              and(
+                eq(databaseSchema.users.id, input.userId),
+                eq(databaseSchema.users.state, "invited"),
               ),
-        database.prepare("DELETE FROM invitations WHERE user_id = ?").bind(input.userId),
-        database
-          .prepare(
-            `INSERT INTO invitations (id, user_id, token_hash, issued_at, expires_at)
-             VALUES (?, ?, ?, ?, ?)`,
-          )
-          .bind(
-            input.invitationId,
-            input.userId,
-            input.tokenHash,
-            input.occurredAt,
-            input.expiresAt,
-          ),
-        database
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(
-            input.auditId,
-            input.actorId,
-            input.existing ? "invitation-reissue" : "invitation-issue",
-            input.userId,
-            input.occurredAt,
-            JSON.stringify({
+            )
+        : database.insert(databaseSchema.users).values({
+            id: input.userId,
+            displayEmail: input.displayEmail,
+            normalizedEmail: input.normalizedEmail,
+            state: "invited",
+            role: input.role,
+            activatedAt: null,
+            createdAt: toDate(input.occurredAt),
+            updatedAt: toDate(input.occurredAt),
+          });
+      try {
+        await database.batch([
+          userWrite,
+          database
+            .delete(databaseSchema.invitations)
+            .where(eq(databaseSchema.invitations.userId, input.userId)),
+          database.insert(databaseSchema.invitations).values({
+            id: input.invitationId,
+            userId: input.userId,
+            tokenHash: input.tokenHash,
+            issuedAt: toDate(input.occurredAt),
+            expiresAt: toDate(input.expiresAt),
+          }),
+          database.insert(databaseSchema.auditEvents).values({
+            id: input.auditId,
+            actorId: input.actorId,
+            action: input.existing ? "invitation-reissue" : "invitation-issue",
+            subjectId: input.userId,
+            occurredAt: toDate(input.occurredAt),
+            metadata: {
               ...(input.existing ? { fromRole: input.existing.role } : {}),
               toRole: input.role,
               toUserState: "invited",
-            }),
-          ),
-      ];
-      try {
-        await database.batch(statements);
+            },
+          }),
+        ]);
         return true;
       } catch {
         return false;
       }
     },
 
-    findInvitedUser(tokenHash, occurredAt) {
-      return database
-        .prepare(
-          `SELECT users.id, users.display_email AS email, users.role, users.state
-           FROM invitations
-           INNER JOIN users ON users.id = invitations.user_id
-           WHERE invitations.token_hash = ?
-             AND invitations.expires_at > ?
-             AND users.state = 'invited'`,
-        )
-        .bind(tokenHash, occurredAt)
-        .first<User>();
+    async findInvitedUser(tokenHash, occurredAt) {
+      return first(
+        await database
+          .select(userSelection)
+          .from(databaseSchema.invitations)
+          .innerJoin(
+            databaseSchema.users,
+            eq(databaseSchema.users.id, databaseSchema.invitations.userId),
+          )
+          .where(
+            and(
+              eq(databaseSchema.invitations.tokenHash, tokenHash),
+              gt(databaseSchema.invitations.expiresAt, toDate(occurredAt)),
+              eq(databaseSchema.users.state, "invited"),
+            ),
+          )
+          .limit(1),
+      );
     },
 
     async accept(input) {
@@ -99,36 +101,41 @@ export function createD1InvitationPersistence(database: D1Database): InvitationP
       try {
         const results = await database.batch([
           database
-            .prepare("DELETE FROM invitations WHERE user_id = ? AND token_hash = ?")
-            .bind(input.userId, input.tokenHash),
-          database
-            .prepare(
-              `INSERT INTO credentials (user_id, verifier, updated_at)
-               VALUES (?, ?, ?)`,
-            )
-            .bind(input.userId, input.verifier, input.occurredAt),
-          database
-            .prepare(
-              `UPDATE users
-               SET state = 'active', activated_at = ?, updated_at = ?
-               WHERE id = ? AND state = 'invited'`,
-            )
-            .bind(input.occurredAt, input.occurredAt, input.userId),
-          database
-            .prepare(
-              `INSERT INTO audit_events
-                 (id, actor_id, action, subject_id, occurred_at, metadata)
-               VALUES (?, ?, 'invitation-accept', ?, ?, ?)`,
-            )
-            .bind(
-              input.auditId,
-              input.userId,
-              input.userId,
-              input.occurredAt,
-              JSON.stringify({ fromUserState: "invited", toUserState: "active" }),
+            .delete(databaseSchema.invitations)
+            .where(
+              and(
+                eq(databaseSchema.invitations.userId, input.userId),
+                eq(databaseSchema.invitations.tokenHash, input.tokenHash),
+              ),
             ),
+          database.insert(databaseSchema.credentials).values({
+            userId: input.userId,
+            verifier: input.verifier,
+            updatedAt: toDate(input.occurredAt),
+          }),
+          database
+            .update(databaseSchema.users)
+            .set({
+              state: "active",
+              activatedAt: toDate(input.occurredAt),
+              updatedAt: toDate(input.occurredAt),
+            })
+            .where(
+              and(
+                eq(databaseSchema.users.id, input.userId),
+                eq(databaseSchema.users.state, "invited"),
+              ),
+            ),
+          database.insert(databaseSchema.auditEvents).values({
+            id: input.auditId,
+            actorId: input.userId,
+            action: "invitation-accept",
+            subjectId: input.userId,
+            occurredAt: toDate(input.occurredAt),
+            metadata: { fromUserState: "invited", toUserState: "active" },
+          }),
         ]);
-        return (results[2]?.meta.changes ?? 0) > 0;
+        return changed(results, 2);
       } catch {
         return false;
       }
@@ -136,24 +143,36 @@ export function createD1InvitationPersistence(database: D1Database): InvitationP
 
     async cancel(input) {
       const results = await database.batch([
+        database.insert(databaseSchema.auditEvents).select(
+          database
+            .select({
+              id: sql<string>`${input.auditId}`.as("id"),
+              actorId: sql<string>`${input.actorId}`.as("actor_id"),
+              action: sql<"invitation-cancel">`${"invitation-cancel"}`.as("action"),
+              subjectId: databaseSchema.users.id,
+              occurredAt: sql<Date>`${input.occurredAt}`.as("occurred_at"),
+              metadata: sql<{ fromUserState: "invited" }>`${JSON.stringify({
+                fromUserState: "invited",
+              })}`.as("metadata"),
+            })
+            .from(databaseSchema.users)
+            .where(
+              and(
+                eq(databaseSchema.users.id, input.userId),
+                eq(databaseSchema.users.state, "invited"),
+              ),
+            ),
+        ),
         database
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, ?, 'invitation-cancel', id, ?, ?
-             FROM users
-             WHERE id = ? AND state = 'invited'`,
-          )
-          .bind(
-            input.auditId,
-            input.actorId,
-            input.occurredAt,
-            JSON.stringify({ fromUserState: "invited" }),
-            input.userId,
+          .delete(databaseSchema.users)
+          .where(
+            and(
+              eq(databaseSchema.users.id, input.userId),
+              eq(databaseSchema.users.state, "invited"),
+            ),
           ),
-        database.prepare("DELETE FROM users WHERE id = ? AND state = 'invited'").bind(input.userId),
       ]);
-      return (results[1]?.meta.changes ?? 0) > 0;
+      return changed(results, 1);
     },
   };
 }

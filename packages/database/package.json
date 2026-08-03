@@ -7,7 +7,16 @@
   ],
   "type": "module",
   "types": "./dist/index.d.ts",
-  "exports": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./d1": {
+      "types": "./dist/d1.d.ts",
+      "default": "./dist/d1.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",

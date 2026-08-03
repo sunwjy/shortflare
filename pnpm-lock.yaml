@@ -134,6 +134,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.2(@cloudflare/workers-types@5.20260719.1)
       hono:
         specifier: 'catalog:'
         version: 4.12.31
