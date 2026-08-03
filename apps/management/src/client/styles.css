@@ -1,13 +1,166 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
 
-@layer base, shell, links, settings, dialog, auth, responsive;
+@custom-variant dark (&:is(.dark *));
 
-@import "./styles/base.css" layer(base);
-@import "./styles/shell.css" layer(shell);
-@import "./styles/links.css" layer(links);
-@import "./styles/settings.css" layer(settings);
-@import "./styles/dialog.css" layer(dialog);
-@import "./styles/auth.css" layer(auth);
-@import "./styles/responsive.css" layer(responsive);
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-information: var(--information);
+  --color-information-soft: var(--information-soft);
+  --color-neutral: var(--neutral);
+  --color-neutral-soft: var(--neutral-soft);
+  --color-archived: var(--archived);
+  --color-archived-soft: var(--archived-soft);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+:root {
+  --radius: 0.6875rem;
+  --background: #f5f7f6;
+  --foreground: #17211f;
+  --card: #ffffff;
+  --card-foreground: #17211f;
+  --popover: #fbfcfb;
+  --popover-foreground: #17211f;
+  --primary: #b83a22;
+  --primary-foreground: #ffffff;
+  --secondary: #eef2f0;
+  --secondary-foreground: #17211f;
+  --muted: #eef2f0;
+  --muted-foreground: #65716d;
+  --accent: #f9e8e3;
+  --accent-foreground: #b83a22;
+  --destructive: #a22b22;
+  --destructive-foreground: #ffffff;
+  --border: #d8dfdc;
+  --input: #7b8984;
+  --ring: #e35b3e;
+  --success: #176b4d;
+  --success-soft: #e4f3ec;
+  --warning: #8a5a00;
+  --warning-soft: #faefcf;
+  --information: #315f78;
+  --information-soft: #e5f0f5;
+  --neutral: #596560;
+  --neutral-soft: #e9eeec;
+  --archived: #665c74;
+  --archived-soft: #eeeaf2;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #17211f;
+  --sidebar-primary: #b83a22;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f9e8e3;
+  --sidebar-accent-foreground: #b83a22;
+  --sidebar-border: #d8dfdc;
+  --sidebar-ring: #e35b3e;
+}
+
+.dark {
+  --background: #111614;
+  --foreground: #f1f5f3;
+  --card: #18201d;
+  --card-foreground: #f1f5f3;
+  --popover: #26312d;
+  --popover-foreground: #f1f5f3;
+  --primary: #f06a4c;
+  --primary-foreground: #111614;
+  --secondary: #202a26;
+  --secondary-foreground: #f1f5f3;
+  --muted: #202a26;
+  --muted-foreground: #8f9d98;
+  --accent: #41241d;
+  --accent-foreground: #f06a4c;
+  --destructive: #ff9b91;
+  --destructive-foreground: #111614;
+  --border: #35423d;
+  --input: #6e8079;
+  --ring: #ff8d73;
+  --success: #78d6ad;
+  --success-soft: #173a2d;
+  --warning: #f4c66a;
+  --warning-soft: #3b2e13;
+  --information: #8fcbe8;
+  --information-soft: #19313d;
+  --neutral: #b9c5c0;
+  --neutral-soft: #28322e;
+  --archived: #cdb9dc;
+  --archived-soft: #33283c;
+  --sidebar: #18201d;
+  --sidebar-foreground: #f1f5f3;
+  --sidebar-primary: #f06a4c;
+  --sidebar-primary-foreground: #111614;
+  --sidebar-accent: #41241d;
+  --sidebar-accent-foreground: #f06a4c;
+  --sidebar-border: #35423d;
+  --sidebar-ring: #ff8d73;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply bg-background font-sans text-foreground;
+    font-synthesis: none;
+  }
+
+  body {
+    @apply min-h-screen min-w-80 bg-background;
+    margin: 0;
+  }
+
+  code {
+    @apply font-mono;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
