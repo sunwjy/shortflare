@@ -3,7 +3,7 @@ import { createMiddleware } from "hono/factory";
 import type { ManagementEnvironment } from "../environment";
 import type { AuthenticationFailurePresenter } from "./authentication";
 
-export function isSameOriginJsonRequest(request: Request) {
+function isSameOriginJsonRequest(request: Request) {
   return (
     request.headers.get("origin") === new URL(request.url).origin &&
     request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ===

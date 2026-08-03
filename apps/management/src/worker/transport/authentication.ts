@@ -69,14 +69,6 @@ export function createAuthenticationMiddleware(
       await next();
     });
 
-  const requireRecentAuthentication = () =>
-    createMiddleware<ManagementEnvironment>(async (context, next) => {
-      if (!context.var.recentlyAuthenticated) {
-        return presentFailure(context, "reauthentication-required", 403);
-      }
-      await next();
-    });
-
   const ensureRecentAuthentication = (context: Context<ManagementEnvironment>) =>
     context.var.recentlyAuthenticated
       ? undefined
@@ -86,7 +78,6 @@ export function createAuthenticationMiddleware(
     ensureRecentAuthentication,
     requireCapability,
     requireMutationSession,
-    requireRecentAuthentication,
     requireSafeSession,
   };
 }
