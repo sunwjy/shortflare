@@ -1,35 +1,22 @@
 import { createD1LinksPersistence } from "@shortflare/database";
 import { createLinks } from "@shortflare/links";
-import { Hono } from "hono";
 
 import { hasCapability } from "./access-control";
 import type { ManagementDependencies } from "./dependencies";
-import type { ManagementEnvironment } from "./environment";
 import { createIdentity, type Identity } from "./modules/identity";
 import { createIdentityHttpRoutes } from "./modules/identity/http/routes";
 import { createLinksHttpRoutes } from "./modules/links/http/routes";
-import { healthResponse } from "./request-schemas";
+import { handleUnexpectedError } from "./transport/error-handler";
+import { createManagementHono } from "./transport/factory";
 import type { RequestAuthentication } from "./transport/request-authentication";
+import { applySecurityHeaders } from "./transport/security-headers";
 
 export function createManagementApp(dependencies: ManagementDependencies) {
-  const app = new Hono<ManagementEnvironment>();
+  const app = createManagementHono();
 
-  app.use("*", async (context, next) => {
-    await next();
-    context.header("Referrer-Policy", "no-referrer");
-    if (context.req.path.startsWith("/api/")) {
-      context.header("Cache-Control", "no-store");
-    }
-  });
-
-  app.onError((error, context) => {
-    console.error(error);
-    return context.json({ ok: false, kind: "internal-error", details: {} } as const, 500);
-  });
-
-  app.get("/api/internal/health", (context) =>
-    context.json(healthResponse.parse({ status: "ok" })),
-  );
+  app.use("*", applySecurityHeaders);
+  app.onError(handleUnexpectedError);
+  app.get("/api/internal/health", (context) => context.json({ status: "ok" } as const));
   app.route("/api/internal", createIdentityHttpRoutes(dependencies));
   app.route("/api/internal", createLinksHttpRoutes(dependencies));
 

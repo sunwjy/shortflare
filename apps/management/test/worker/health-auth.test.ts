@@ -17,6 +17,8 @@ describe("management health and authentication", () => {
     const response = await app.request("http://management.test/api/internal/health");
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(await response.json()).toEqual({ status: "ok" });
   });
 

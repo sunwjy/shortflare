@@ -1,7 +1,8 @@
-import { type Context, Hono } from "hono";
+import type { Context } from "hono";
 
 import type { ManagementEnvironment } from "../../../environment";
 import { createAuthenticationMiddleware } from "../../../transport/authentication";
+import { createManagementHono } from "../../../transport/factory";
 import { parseJson } from "../../../transport/json";
 import { requireJsonRequestIntegrity } from "../../../transport/request-integrity";
 import type { LinksHttpDependencies } from "./dependencies";
@@ -17,7 +18,7 @@ import {
 import { presentAuthenticationFailure } from "./security";
 
 export function createLinkResourceRoutes(dependencies: LinksHttpDependencies) {
-  const routes = new Hono<ManagementEnvironment>();
+  const routes = createManagementHono();
   const authentication = createAuthenticationMiddleware(dependencies, presentAuthenticationFailure);
   const requireIntegrity = requireJsonRequestIntegrity(presentAuthenticationFailure);
 

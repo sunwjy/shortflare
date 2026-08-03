@@ -1,7 +1,5 @@
-import { Hono } from "hono";
-
 import type { ManagementDependencies } from "../../../dependencies";
-import type { ManagementEnvironment } from "../../../environment";
+import { createManagementHono } from "../../../transport/factory";
 import { createAuthRoutes } from "./auth-routes";
 import { createUserRoutes } from "./user-routes";
 
@@ -11,7 +9,7 @@ type IdentityHttpDependencies = Pick<
 >;
 
 export function createIdentityHttpRoutes(dependencies: IdentityHttpDependencies) {
-  return new Hono<ManagementEnvironment>()
+  return createManagementHono()
     .route("/auth", createAuthRoutes(dependencies))
     .route("/users", createUserRoutes(dependencies));
 }

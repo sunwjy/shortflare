@@ -1,4 +1,4 @@
-import { type Context, Hono } from "hono";
+import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { z } from "zod";
 
@@ -8,6 +8,7 @@ import {
   createAuthenticationMiddleware,
   type AuthenticationFailurePresenter,
 } from "../../../transport/authentication";
+import { createManagementHono } from "../../../transport/factory";
 import { parseJson } from "../../../transport/json";
 import { requireJsonRequestIntegrity } from "../../../transport/request-integrity";
 import { deleteSessionCookie, setSessionCookie } from "./cookies";
@@ -28,7 +29,7 @@ export function createAuthRoutes(
     "createIdentity" | "createRequestAuthentication" | "hasCapability"
   >,
 ) {
-  const authRoutes = new Hono<ManagementEnvironment>();
+  const authRoutes = createManagementHono();
   const authentication = createAuthenticationMiddleware(dependencies, presentAuthenticationFailure);
   const requireIntegrity = requireJsonRequestIntegrity(presentAuthenticationFailure);
 

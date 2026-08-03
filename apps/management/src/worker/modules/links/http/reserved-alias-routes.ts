@@ -1,7 +1,5 @@
-import { Hono } from "hono";
-
-import type { ManagementEnvironment } from "../../../environment";
 import { createAuthenticationMiddleware } from "../../../transport/authentication";
+import { createManagementHono } from "../../../transport/factory";
 import { parseJson } from "../../../transport/json";
 import { requireJsonRequestIntegrity } from "../../../transport/request-integrity";
 import type { LinksHttpDependencies } from "./dependencies";
@@ -12,7 +10,7 @@ import { confirmationRequest } from "./schemas";
 import { presentAuthenticationFailure } from "./security";
 
 export function createReservedAliasRoutes(dependencies: LinksHttpDependencies) {
-  const routes = new Hono<ManagementEnvironment>();
+  const routes = createManagementHono();
   const authentication = createAuthenticationMiddleware(dependencies, presentAuthenticationFailure);
   const requireIntegrity = requireJsonRequestIntegrity(presentAuthenticationFailure);
 
