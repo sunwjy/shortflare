@@ -1,4 +1,4 @@
-import type { User, UserRole } from "./identity";
+import type { User, UserRole } from "../identity";
 
 export type Capability =
   | "manage-links"

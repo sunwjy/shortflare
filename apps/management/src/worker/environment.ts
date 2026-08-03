@@ -1,3 +1,5 @@
+import type { User } from "./identity";
+
 /**
  * Cloudflare bindings available to the Management Worker.
  *
@@ -9,4 +11,11 @@ export type ManagementBindings = {
   REDIRECT_DOMAIN: string;
 };
 
-export type ManagementEnvironment = { Bindings: ManagementBindings };
+export type ManagementEnvironment = {
+  Bindings: ManagementBindings;
+  Variables: {
+    authenticatedUser: User;
+    sessionToken: string;
+    recentlyAuthenticated: boolean;
+  };
+};

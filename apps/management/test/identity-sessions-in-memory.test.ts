@@ -34,7 +34,7 @@ describe("Identity Sessions with in-memory persistence", () => {
     if (!login.ok) throw new Error("Expected login to succeed");
 
     await expect(
-      sessions.authenticateRequest(login.session.token, login.session.csrfToken, true),
+      sessions.authenticateRequest(login.session.token, login.session.csrfToken),
     ).resolves.toMatchObject({
       ok: true,
       kind: "user",

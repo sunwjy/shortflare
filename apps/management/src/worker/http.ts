@@ -1,27 +1,11 @@
 import type { Link, LinkState, LinkSummary } from "@shortflare/links";
 import type { Context } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 
-import { type Capability, hasCapability } from "./authorization";
-import type { ManagementDependencies } from "./dependencies";
 import type { ManagementEnvironment } from "./environment";
-import type { User } from "./identity";
 
 const sessionCookieName = "__Host-shortflare_session";
-
-/**
- * Verifies the two request-integrity properties shared by every mutation.
- * Authentication is deliberately separate so public token endpoints can use
- * the same Origin and content-type policy without requiring a Session.
- */
-export function isSameOriginJsonRequest(request: Request) {
-  return (
-    request.headers.get("origin") === new URL(request.url).origin &&
-    request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ===
-      "application/json"
-  );
-}
 
 export function parseLinkListQuery(request: Request):
   | Readonly<{
@@ -125,10 +109,6 @@ export function apiError(kind: string, details: Record<string, unknown> = {}) {
   return { ok: false as const, kind, details };
 }
 
-function authenticationError(kind: string, withDetails = false) {
-  return withDetails ? apiError(kind) : { ok: false as const, kind };
-}
-
 export function toLinkDto(link: Link, redirectDomain: string) {
   const destination = link.destinationVersions.at(-1);
   if (destination === undefined) {
@@ -207,113 +187,4 @@ export function setSessionCookie(
     sameSite: "Lax",
     secure: true,
   });
-}
-
-type IdentityFactory = ManagementDependencies["createIdentity"];
-
-export function createAuthentication(createIdentity: IdentityFactory) {
-  return {
-    authenticateMutation: (
-      context: Context<ManagementEnvironment>,
-      requirements: Readonly<{
-        capability?: Capability;
-        recent?: boolean;
-        apiErrors?: boolean;
-      }> = {},
-    ) => authenticateMutation(context, createIdentity, requirements),
-    authenticateSafe: (
-      context: Context<ManagementEnvironment>,
-      capability?: Capability,
-      apiErrors = false,
-    ) => authenticateSafe(context, createIdentity, capability, apiErrors),
-  };
-}
-
-async function authenticateMutation(
-  context: Context<ManagementEnvironment>,
-  createIdentity: IdentityFactory,
-  requirements: Readonly<{
-    capability?: Capability;
-    recent?: boolean;
-    apiErrors?: boolean;
-  }> = {},
-): Promise<
-  | Readonly<{
-      identity: ReturnType<typeof createIdentity>;
-      user: User;
-      sessionToken: string;
-      recentlyAuthenticated: boolean;
-    }>
-  | Readonly<{ response: Response }>
-> {
-  if (!isSameOriginJsonRequest(context.req.raw)) {
-    return {
-      response: context.json(authenticationError("forbidden", requirements.apiErrors), 403),
-    };
-  }
-  const sessionToken = getCookie(context, sessionCookieName);
-  if (!sessionToken) {
-    return {
-      response: context.json(authenticationError("unauthenticated", requirements.apiErrors), 401),
-    };
-  }
-  const identity = createIdentity(context.env);
-  const authentication = await identity.authenticateRequest(
-    sessionToken,
-    context.req.header("x-csrf-token") ?? "",
-    requirements.recent,
-  );
-  if (!authentication.ok) {
-    const unauthenticated = authentication.kind === "invalid-credentials";
-    return {
-      response: context.json(
-        authenticationError(
-          unauthenticated ? "unauthenticated" : authentication.kind,
-          requirements.apiErrors,
-        ),
-        unauthenticated ? 401 : 403,
-      ),
-    };
-  }
-  if (requirements.capability && !hasCapability(authentication.user, requirements.capability)) {
-    return {
-      response: context.json(authenticationError("forbidden", requirements.apiErrors), 403),
-    };
-  }
-  return {
-    identity,
-    user: authentication.user,
-    sessionToken,
-    recentlyAuthenticated: authentication.recentlyAuthenticated,
-  };
-}
-
-async function authenticateSafe(
-  context: Context<ManagementEnvironment>,
-  createIdentity: IdentityFactory,
-  capability?: Capability,
-  apiErrors = false,
-): Promise<
-  | Readonly<{ identity: ReturnType<typeof createIdentity>; user: User }>
-  | Readonly<{ response: Response }>
-> {
-  const sessionToken = getCookie(context, sessionCookieName);
-  if (!sessionToken) {
-    return {
-      response: context.json(authenticationError("unauthenticated", apiErrors), 401),
-    };
-  }
-  const identity = createIdentity(context.env);
-  const authentication = await identity.authenticate(sessionToken);
-  if (!authentication.ok) {
-    return {
-      response: context.json(authenticationError("unauthenticated", apiErrors), 401),
-    };
-  }
-  if (capability && !hasCapability(authentication.user, capability)) {
-    return {
-      response: context.json(authenticationError("forbidden", apiErrors), 403),
-    };
-  }
-  return { identity, user: authentication.user };
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type Capability, hasCapability } from "../src/worker/authorization";
+import { type Capability, hasCapability } from "../src/worker/access-control";
 import type { User, UserRole } from "../src/worker/identity";
 
 describe("authorization", () => {

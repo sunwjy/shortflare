@@ -121,11 +121,7 @@ export function createSessions(
         : ({ ok: false, kind: "invalid-credentials" } as const);
     },
 
-    async authenticateRequest(
-      token: string,
-      csrfToken: string,
-      requireRecentAuthentication = false,
-    ) {
+    async authenticateRequest(token: string, csrfToken: string) {
       const occurredAt = dependencies.now().getTime();
       const tokenHash = await hashToken(token);
       const record = await persistence.findRequest(tokenHash, occurredAt);
@@ -135,9 +131,6 @@ export function createSessions(
       }
 
       const recentlyAuthenticated = occurredAt - record.recentAuthenticationAt <= recentDuration;
-      if (requireRecentAuthentication && !recentlyAuthenticated) {
-        return { ok: false, kind: "reauthentication-required" } as const;
-      }
       if (occurredAt - record.lastSeenAt >= refreshInterval) {
         // The expected timestamp makes concurrent refreshes harmless, and the
         // idle extension is always capped by the original absolute lifetime.
