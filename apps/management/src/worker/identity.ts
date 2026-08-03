@@ -70,3 +70,5 @@ export function createIdentity(options: IdentityOptions) {
     ...operatorRecovery,
   };
 }
+
+export type Identity = ReturnType<typeof createIdentity>;

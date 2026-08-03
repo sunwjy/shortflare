@@ -1,109 +1,116 @@
 import { type Context, Hono } from "hono";
 
+import type { ManagementDependencies } from "../dependencies";
 import type { ManagementEnvironment } from "../environment";
-import { authenticateMutation, authenticateSafe, parseJson } from "../http";
-import { createIdentity } from "../identity";
+import { createAuthentication, parseJson } from "../http";
+import type { Identity } from "../identity";
 import { emptyRequest, invitationRequest, roleRequest } from "../request-schemas";
 
-export const userRoutes = new Hono<ManagementEnvironment>();
-type Identity = ReturnType<typeof createIdentity>;
+export function createUserRoutes(dependencies: Pick<ManagementDependencies, "createIdentity">) {
+  const userRoutes = new Hono<ManagementEnvironment>();
+  const { authenticateMutation, authenticateSafe } = createAuthentication(
+    dependencies.createIdentity,
+  );
 
-userRoutes.post("/invitations", async (context) => {
-  const request = await parseJson(context.req.raw, invitationRequest);
-  if (!request) {
-    return context.json({ ok: false, kind: "invalid-request" } as const, 400);
-  }
-  const authenticated = await authenticateMutation(context, {
-    capability: "manage-users",
-    recent: request.role === "administrator",
-  });
-  if ("response" in authenticated) return authenticated.response;
+  userRoutes.post("/invitations", async (context) => {
+    const request = await parseJson(context.req.raw, invitationRequest);
+    if (!request) {
+      return context.json({ ok: false, kind: "invalid-request" } as const, 400);
+    }
+    const authenticated = await authenticateMutation(context, {
+      capability: "manage-users",
+      recent: request.role === "administrator",
+    });
+    if ("response" in authenticated) return authenticated.response;
 
-  const result = await authenticated.identity.issueInvitation({
-    actorId: authenticated.user.id,
-    ...request,
+    const result = await authenticated.identity.issueInvitation({
+      actorId: authenticated.user.id,
+      ...request,
+    });
+    return context.json(result, invitationStatus(result));
   });
-  return context.json(result, invitationStatus(result));
-});
 
-userRoutes.get("/", async (context) => {
-  const authenticated = await authenticateSafe(context, "view-users");
-  if ("response" in authenticated) return authenticated.response;
-  return context.json({
-    ok: true as const,
-    users: await authenticated.identity.listUsers(),
+  userRoutes.get("/", async (context) => {
+    const authenticated = await authenticateSafe(context, "view-users");
+    if ("response" in authenticated) return authenticated.response;
+    return context.json({
+      ok: true as const,
+      users: await authenticated.identity.listUsers(),
+    });
   });
-});
 
-userRoutes.post("/:userId/cancel-invitation", async (context) => {
-  const authenticated = await authenticateMutation(context, {
-    capability: "manage-users",
+  userRoutes.post("/:userId/cancel-invitation", async (context) => {
+    const authenticated = await authenticateMutation(context, {
+      capability: "manage-users",
+    });
+    if ("response" in authenticated) return authenticated.response;
+    if (!(await parseEmptyRequest(context))) return invalidRequest(context);
+    const result = await authenticated.identity.cancelInvitation({
+      actorId: authenticated.user.id,
+      userId: context.req.param("userId"),
+    });
+    return context.json(result, result.ok ? 200 : 404);
   });
-  if ("response" in authenticated) return authenticated.response;
-  if (!(await parseEmptyRequest(context))) return invalidRequest(context);
-  const result = await authenticated.identity.cancelInvitation({
-    actorId: authenticated.user.id,
-    userId: context.req.param("userId"),
-  });
-  return context.json(result, result.ok ? 200 : 404);
-});
 
-userRoutes.post("/:userId/password-resets", async (context) => {
-  const authenticated = await authenticateMutation(context, {
-    capability: "manage-users",
-    recent: true,
+  userRoutes.post("/:userId/password-resets", async (context) => {
+    const authenticated = await authenticateMutation(context, {
+      capability: "manage-users",
+      recent: true,
+    });
+    if ("response" in authenticated) return authenticated.response;
+    if (!(await parseEmptyRequest(context))) return invalidRequest(context);
+    const result = await authenticated.identity.issuePasswordReset({
+      actorId: authenticated.user.id,
+      userId: context.req.param("userId"),
+    });
+    return context.json(result, passwordResetStatus(result));
   });
-  if ("response" in authenticated) return authenticated.response;
-  if (!(await parseEmptyRequest(context))) return invalidRequest(context);
-  const result = await authenticated.identity.issuePasswordReset({
-    actorId: authenticated.user.id,
-    userId: context.req.param("userId"),
-  });
-  return context.json(result, passwordResetStatus(result));
-});
 
-userRoutes.post("/:userId/role", async (context) => {
-  const request = await parseJson(context.req.raw, roleRequest);
-  if (!request) return invalidRequest(context);
-  const authenticated = await authenticateMutation(context, {
-    capability: "manage-users",
+  userRoutes.post("/:userId/role", async (context) => {
+    const request = await parseJson(context.req.raw, roleRequest);
+    if (!request) return invalidRequest(context);
+    const authenticated = await authenticateMutation(context, {
+      capability: "manage-users",
+    });
+    if ("response" in authenticated) return authenticated.response;
+    const result = await authenticated.identity.changeRole({
+      actorId: authenticated.user.id,
+      userId: context.req.param("userId"),
+      role: request.role,
+      recentlyAuthenticated: authenticated.recentlyAuthenticated,
+    });
+    return context.json(result, lifecycleStatus(result));
   });
-  if ("response" in authenticated) return authenticated.response;
-  const result = await authenticated.identity.changeRole({
-    actorId: authenticated.user.id,
-    userId: context.req.param("userId"),
-    role: request.role,
-    recentlyAuthenticated: authenticated.recentlyAuthenticated,
-  });
-  return context.json(result, lifecycleStatus(result));
-});
 
-userRoutes.post("/:userId/suspend", async (context) => {
-  const authenticated = await authenticateMutation(context, {
-    capability: "manage-users",
+  userRoutes.post("/:userId/suspend", async (context) => {
+    const authenticated = await authenticateMutation(context, {
+      capability: "manage-users",
+    });
+    if ("response" in authenticated) return authenticated.response;
+    if (!(await parseEmptyRequest(context))) return invalidRequest(context);
+    const result = await authenticated.identity.suspendUser({
+      actorId: authenticated.user.id,
+      userId: context.req.param("userId"),
+      recentlyAuthenticated: authenticated.recentlyAuthenticated,
+    });
+    return context.json(result, lifecycleStatus(result));
   });
-  if ("response" in authenticated) return authenticated.response;
-  if (!(await parseEmptyRequest(context))) return invalidRequest(context);
-  const result = await authenticated.identity.suspendUser({
-    actorId: authenticated.user.id,
-    userId: context.req.param("userId"),
-    recentlyAuthenticated: authenticated.recentlyAuthenticated,
-  });
-  return context.json(result, lifecycleStatus(result));
-});
 
-userRoutes.post("/:userId/reactivate", async (context) => {
-  const authenticated = await authenticateMutation(context, {
-    capability: "manage-users",
+  userRoutes.post("/:userId/reactivate", async (context) => {
+    const authenticated = await authenticateMutation(context, {
+      capability: "manage-users",
+    });
+    if ("response" in authenticated) return authenticated.response;
+    if (!(await parseEmptyRequest(context))) return invalidRequest(context);
+    const result = await authenticated.identity.reactivateUser({
+      actorId: authenticated.user.id,
+      userId: context.req.param("userId"),
+    });
+    return context.json(result, result.ok ? 200 : 404);
   });
-  if ("response" in authenticated) return authenticated.response;
-  if (!(await parseEmptyRequest(context))) return invalidRequest(context);
-  const result = await authenticated.identity.reactivateUser({
-    actorId: authenticated.user.id,
-    userId: context.req.param("userId"),
-  });
-  return context.json(result, result.ok ? 200 : 404);
-});
+
+  return userRoutes;
+}
 
 async function parseEmptyRequest(context: Context<ManagementEnvironment>) {
   return parseJson(context.req.raw, emptyRequest);

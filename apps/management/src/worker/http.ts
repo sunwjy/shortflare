@@ -4,8 +4,9 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
 
 import { type Capability, hasCapability } from "./authorization";
+import type { ManagementDependencies } from "./dependencies";
 import type { ManagementEnvironment } from "./environment";
-import { createIdentity, type User } from "./identity";
+import type { User } from "./identity";
 
 const sessionCookieName = "__Host-shortflare_session";
 
@@ -208,8 +209,29 @@ export function setSessionCookie(
   });
 }
 
-export async function authenticateMutation(
+type IdentityFactory = ManagementDependencies["createIdentity"];
+
+export function createAuthentication(createIdentity: IdentityFactory) {
+  return {
+    authenticateMutation: (
+      context: Context<ManagementEnvironment>,
+      requirements: Readonly<{
+        capability?: Capability;
+        recent?: boolean;
+        apiErrors?: boolean;
+      }> = {},
+    ) => authenticateMutation(context, createIdentity, requirements),
+    authenticateSafe: (
+      context: Context<ManagementEnvironment>,
+      capability?: Capability,
+      apiErrors = false,
+    ) => authenticateSafe(context, createIdentity, capability, apiErrors),
+  };
+}
+
+async function authenticateMutation(
   context: Context<ManagementEnvironment>,
+  createIdentity: IdentityFactory,
   requirements: Readonly<{
     capability?: Capability;
     recent?: boolean;
@@ -235,7 +257,7 @@ export async function authenticateMutation(
       response: context.json(authenticationError("unauthenticated", requirements.apiErrors), 401),
     };
   }
-  const identity = createIdentity({ db: context.env.DB });
+  const identity = createIdentity(context.env);
   const authentication = await identity.authenticateRequest(
     sessionToken,
     context.req.header("x-csrf-token") ?? "",
@@ -266,8 +288,9 @@ export async function authenticateMutation(
   };
 }
 
-export async function authenticateSafe(
+async function authenticateSafe(
   context: Context<ManagementEnvironment>,
+  createIdentity: IdentityFactory,
   capability?: Capability,
   apiErrors = false,
 ): Promise<
@@ -280,7 +303,7 @@ export async function authenticateSafe(
       response: context.json(authenticationError("unauthenticated", apiErrors), 401),
     };
   }
-  const identity = createIdentity({ db: context.env.DB });
+  const identity = createIdentity(context.env);
   const authentication = await identity.authenticate(sessionToken);
   if (!authentication.ok) {
     return {
