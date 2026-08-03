@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { createInMemoryPasswordResetPersistence } from "../src/worker/identity/in-memory-password-resets";
-import { createPasswordResets } from "../src/worker/identity/password-resets";
-import type { User } from "../src/worker/identity";
+import { createInMemoryPasswordResetPersistence } from "../src/worker/modules/identity/adapters/in-memory/password-resets";
+import { createPasswordResets } from "../src/worker/modules/identity/application/password-resets";
+import type { User } from "../src/worker/modules/identity";
 
 const user: User = {
   id: "user",

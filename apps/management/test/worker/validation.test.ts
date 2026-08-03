@@ -8,6 +8,67 @@ import { authenticatedHeaders, loginAdministrator } from "../support/worker-auth
 describe("management transport validation", () => {
   beforeEach(resetManagementDatabase);
 
+  it("rejects request integrity failures before validating a mutation", async () => {
+    const response = await app.request(
+      "https://management.test/api/internal/users/invitations",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://attacker.test",
+        },
+        body: JSON.stringify({ unexpected: true }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ ok: false, kind: "forbidden" });
+  });
+
+  it("rejects unauthenticated mutations before validating their body", async () => {
+    const response = await app.request(
+      "https://management.test/api/internal/users/missing/role",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://management.test",
+        },
+        body: JSON.stringify({ unexpected: true }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ ok: false, kind: "unauthenticated" });
+  });
+
+  it("validates an authorized mutation before requiring recent authentication", async () => {
+    const authentication = await loginAdministrator();
+    const staleAuthentication = Date.now() - 11 * 60 * 1_000;
+    await env.DB.prepare("UPDATE sessions SET created_at = ?, recent_authentication_at = ?")
+      .bind(staleAuthentication, staleAuthentication)
+      .run();
+
+    const response = await app.request(
+      "https://management.test/api/internal/links/missing/permanently-delete",
+      {
+        method: "POST",
+        headers: authenticatedHeaders(authentication),
+        body: JSON.stringify({ unexpected: true }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      ok: false,
+      kind: "invalid-request",
+      details: {},
+    });
+  });
+
   it("reports an Alias collision as a conflict", async () => {
     const authentication = await loginAdministrator();
     const request = {

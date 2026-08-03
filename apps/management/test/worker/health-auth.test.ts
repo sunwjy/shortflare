@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { app } from "../../src/worker/index";
-import { createIdentity } from "../../src/worker/identity";
+import { createIdentity } from "../../src/worker/modules/identity";
 import { resetManagementDatabase } from "../support/management-database";
 import {
   authenticatedHeaders,
@@ -17,6 +17,8 @@ describe("management health and authentication", () => {
     const response = await app.request("http://management.test/api/internal/health");
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(await response.json()).toEqual({ status: "ok" });
   });
 
@@ -42,7 +44,7 @@ describe("management health and authentication", () => {
   });
 
   it("sets up the initial Administrator and logs in with a secure Session cookie", async () => {
-    await createIdentity({ db: env.DB }).writeInitialSetup({
+    await createIdentity({ db: env.DB }).initialSetup.writeInitialSetup({
       displayEmail: "Admin@Example.com",
       token: "setup-secret",
       expiresAt: new Date(Date.now() + 30 * 60 * 1_000),
@@ -252,13 +254,13 @@ describe("management health and authentication", () => {
     ).first<{ id: string }>();
     if (!administratorRecord) throw new Error("Expected Administrator");
     const identity = createIdentity({ db: env.DB });
-    const invitation = await identity.issueInvitation({
+    const invitation = await identity.invitations.issueInvitation({
       actorId: administratorRecord.id,
       email: "Member@Example.com",
       role: "member",
     });
     if (!invitation.ok) throw new Error("Expected Member invitation");
-    await identity.acceptInvitation({
+    await identity.invitations.acceptInvitation({
       token: invitation.invitation.token,
       password: "crimson satellites wander afar 286",
     });

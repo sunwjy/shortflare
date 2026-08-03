@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { createInMemoryOperatorRecoveryPersistence } from "../src/worker/identity/in-memory-operator-recovery";
-import { createOperatorRecovery } from "../src/worker/identity/operator-recovery";
-import type { User } from "../src/worker/identity";
+import { createInMemoryOperatorRecoveryPersistence } from "../src/worker/modules/identity/adapters/in-memory/operator-recovery";
+import { createOperatorRecovery } from "../src/worker/modules/identity/application/operator-recovery";
+import type { User } from "../src/worker/modules/identity";
 
 const administrator: User = {
   id: "administrator",

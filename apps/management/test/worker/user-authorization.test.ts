@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { app } from "../../src/worker/index";
-import { createIdentity } from "../../src/worker/identity";
+import { createIdentity } from "../../src/worker/modules/identity";
 import { resetManagementDatabase } from "../support/management-database";
 import { authenticatedHeaders, loginAdministrator } from "../support/worker-authentication";
 
@@ -18,7 +18,7 @@ describe("management User authorization", () => {
       throw new Error("Expected Administrator");
     }
     const identity = createIdentity({ db: env.DB });
-    const invitation = await identity.issueInvitation({
+    const invitation = await identity.invitations.issueInvitation({
       actorId: administratorRecord.id,
       email: "Member@Example.com",
       role: "member",
@@ -26,7 +26,7 @@ describe("management User authorization", () => {
     if (!invitation.ok) {
       throw new Error("Expected invitation");
     }
-    const member = await identity.acceptInvitation({
+    const member = await identity.invitations.acceptInvitation({
       token: invitation.invitation.token,
       password: "crimson satellites wander afar 286",
     });
@@ -60,7 +60,7 @@ describe("management User authorization", () => {
     );
     expect(memberResponse.status).toBe(200);
 
-    const administratorInvitation = await identity.issueInvitation({
+    const administratorInvitation = await identity.invitations.issueInvitation({
       actorId: administratorRecord.id,
       email: "SecondAdmin@Example.com",
       role: "administrator",
@@ -68,7 +68,7 @@ describe("management User authorization", () => {
     if (!administratorInvitation.ok) {
       throw new Error("Expected Administrator invitation");
     }
-    const secondAdministrator = await identity.acceptInvitation({
+    const secondAdministrator = await identity.invitations.acceptInvitation({
       token: administratorInvitation.invitation.token,
       password: "amber satellites wander afar 492",
     });
@@ -91,7 +91,7 @@ describe("management User authorization", () => {
       ok: false,
       kind: "reauthentication-required",
     });
-    await expect(identity.getUser(secondAdministrator.user.id)).resolves.toMatchObject({
+    await expect(identity.users.getUser(secondAdministrator.user.id)).resolves.toMatchObject({
       state: "active",
     });
   });
@@ -105,7 +105,7 @@ describe("management User authorization", () => {
       throw new Error("Expected Administrator");
     }
     const identity = createIdentity({ db: env.DB });
-    const invitation = await identity.issueInvitation({
+    const invitation = await identity.invitations.issueInvitation({
       actorId: administratorRecord.id,
       email: "Member@Example.com",
       role: "member",
@@ -113,7 +113,7 @@ describe("management User authorization", () => {
     if (!invitation.ok) {
       throw new Error("Expected invitation");
     }
-    const member = await identity.acceptInvitation({
+    const member = await identity.invitations.acceptInvitation({
       token: invitation.invitation.token,
       password: "crimson satellites wander afar 286",
     });
@@ -140,7 +140,7 @@ describe("management User authorization", () => {
       ok: false,
       kind: "reauthentication-required",
     });
-    await expect(identity.getUser(member.user.id)).resolves.toMatchObject({ role: "member" });
+    await expect(identity.users.getUser(member.user.id)).resolves.toMatchObject({ role: "member" });
 
     const resetResponse = await app.request(
       `https://management.test/api/internal/users/${member.user.id}/password-resets`,

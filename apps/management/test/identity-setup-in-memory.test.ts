@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createInMemoryInitialSetupPersistence } from "../src/worker/identity/in-memory-initial-setup";
-import { createInitialSetup } from "../src/worker/identity/initial-setup";
+import { createInMemoryInitialSetupPersistence } from "../src/worker/modules/identity/adapters/in-memory/initial-setup";
+import { createInitialSetup } from "../src/worker/modules/identity/application/initial-setup";
 
 describe("Identity Initial Setup with in-memory persistence", () => {
   it("permanently closes after consuming the setup token", async () => {

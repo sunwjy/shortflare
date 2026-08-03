@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { createInMemorySessionPersistence } from "../src/worker/identity/in-memory-sessions";
-import { createSessions } from "../src/worker/identity/sessions";
-import { createPasswordVerifier } from "../src/worker/passwords";
+import { createInMemorySessionPersistence } from "../src/worker/modules/identity/adapters/in-memory/sessions";
+import { createSessions } from "../src/worker/modules/identity/application/sessions";
+import { createPasswordVerifier } from "../src/worker/modules/identity/application/passwords";
 
 describe("Identity Sessions with in-memory persistence", () => {
   it("logs in, authenticates mutations, and logs out through the capability interface", async () => {
@@ -34,7 +34,7 @@ describe("Identity Sessions with in-memory persistence", () => {
     if (!login.ok) throw new Error("Expected login to succeed");
 
     await expect(
-      sessions.authenticateRequest(login.session.token, login.session.csrfToken, true),
+      sessions.authenticateRequest(login.session.token, login.session.csrfToken),
     ).resolves.toMatchObject({
       ok: true,
       kind: "user",

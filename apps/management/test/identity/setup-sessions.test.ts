@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { scrypt } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createIdentity } from "../../src/worker/identity";
+import { createIdentity } from "../../src/worker/modules/identity";
 import { resetIdentityDatabase } from "../support/management-database";
 
 const now = new Date("2026-07-26T00:00:00.000Z");
@@ -17,13 +17,13 @@ describe("Identity setup and Sessions", () => {
       now: () => now,
       randomId: () => "generated-id",
     });
-    await identity.writeInitialSetup({
+    await identity.initialSetup.writeInitialSetup({
       displayEmail: "Admin@Example.com",
       token: "setup-secret",
       expiresAt: new Date(now.getTime() + 30 * 60 * 1_000),
     });
 
-    const result = await identity.completeInitialSetup({
+    const result = await identity.initialSetup.completeInitialSetup({
       token: "setup-secret",
       password: "violet glacier orbits quietly 729",
     });
@@ -39,7 +39,7 @@ describe("Identity setup and Sessions", () => {
       },
     });
     await expect(
-      identity.completeInitialSetup({
+      identity.initialSetup.completeInitialSetup({
         token: "setup-secret",
         password: "violet glacier orbits quietly 729",
       }),
@@ -54,17 +54,17 @@ describe("Identity setup and Sessions", () => {
       randomId: () => `generated-id-${++nextId}`,
       randomToken: () => `generated-token-${nextId}`,
     });
-    await identity.writeInitialSetup({
+    await identity.initialSetup.writeInitialSetup({
       displayEmail: "Admin@Example.com",
       token: "setup-secret",
       expiresAt: new Date(now.getTime() + 30 * 60 * 1_000),
     });
-    await identity.completeInitialSetup({
+    await identity.initialSetup.completeInitialSetup({
       token: "setup-secret",
       password: "violet glacier orbits quietly 729",
     });
 
-    const result = await identity.login({
+    const result = await identity.sessions.login({
       email: " admin@example.COM ",
       password: "violet glacier orbits quietly 729",
     });
@@ -84,7 +84,7 @@ describe("Identity setup and Sessions", () => {
     if (!result.ok) {
       throw new Error("Expected login to succeed");
     }
-    await expect(identity.authenticate(result.session.token)).resolves.toEqual({
+    await expect(identity.sessions.authenticate(result.session.token)).resolves.toEqual({
       ok: true,
       kind: "user",
       user: result.session.user,
@@ -100,16 +100,16 @@ describe("Identity setup and Sessions", () => {
       randomId: () => `generated-id-${++nextId}`,
       randomToken: () => `generated-token-${++nextId}`,
     });
-    await identity.writeInitialSetup({
+    await identity.initialSetup.writeInitialSetup({
       displayEmail: "Admin@Example.com",
       token: "setup-secret",
       expiresAt: new Date(now.getTime() + 30 * 60 * 1_000),
     });
-    await identity.completeInitialSetup({
+    await identity.initialSetup.completeInitialSetup({
       token: "setup-secret",
       password: "violet glacier orbits quietly 729",
     });
-    const login = await identity.login({
+    const login = await identity.sessions.login({
       email: "admin@example.com",
       password: "violet glacier orbits quietly 729",
     });
@@ -118,7 +118,7 @@ describe("Identity setup and Sessions", () => {
     }
     const beforeRead = await readSessionTimes();
 
-    const opened = await identity.openSession(login.session.token);
+    const opened = await identity.sessions.openSession(login.session.token);
 
     expect(opened).toMatchObject({
       ok: true,
@@ -128,19 +128,19 @@ describe("Identity setup and Sessions", () => {
 
     currentTime = new Date(now.getTime() + 60 * 60 * 1_000);
     await expect(
-      identity.authenticateRequest(login.session.token, login.session.csrfToken),
+      identity.sessions.authenticateRequest(login.session.token, login.session.csrfToken),
     ).resolves.toMatchObject({ ok: true, kind: "user" });
     const afterFirstMutation = await readSessionTimes();
     expect(afterFirstMutation.lastSeenAt).toBe(currentTime.getTime());
 
     currentTime = new Date(now.getTime() + 90 * 60 * 1_000);
     await expect(
-      identity.authenticateRequest(login.session.token, login.session.csrfToken),
+      identity.sessions.authenticateRequest(login.session.token, login.session.csrfToken),
     ).resolves.toMatchObject({ ok: true, kind: "user" });
     await expect(readSessionTimes()).resolves.toEqual(afterFirstMutation);
 
     currentTime = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1_000 + 30 * 60 * 1_000);
-    await expect(identity.authenticate(login.session.token)).resolves.toMatchObject({
+    await expect(identity.sessions.authenticate(login.session.token)).resolves.toMatchObject({
       ok: true,
       kind: "user",
     });
@@ -148,12 +148,12 @@ describe("Identity setup and Sessions", () => {
 
   it("rehashes a whitelisted legacy scrypt verifier after successful login", async () => {
     const identity = createIdentity({ db: env.DB, now: () => now });
-    await identity.writeInitialSetup({
+    await identity.initialSetup.writeInitialSetup({
       displayEmail: "Admin@Example.com",
       token: "setup-secret",
       expiresAt: new Date(now.getTime() + 30 * 60 * 1_000),
     });
-    const setup = await identity.completeInitialSetup({
+    const setup = await identity.initialSetup.completeInitialSetup({
       token: "setup-secret",
       password: "violet glacier orbits quietly 729",
     });
@@ -166,7 +166,7 @@ describe("Identity setup and Sessions", () => {
       .run();
 
     await expect(
-      identity.login({
+      identity.sessions.login({
         email: "admin@example.com",
         password: "violet glacier orbits quietly 729",
       }),
@@ -192,7 +192,7 @@ describe("Identity setup and Sessions", () => {
         `${"a".repeat(65)}@example.com`,
       ].map((email) =>
         expect(
-          identity.issueInvitation({
+          identity.invitations.issueInvitation({
             actorId: "administrator",
             email,
             role: "member",

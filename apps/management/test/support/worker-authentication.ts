@@ -1,18 +1,18 @@
 import { env } from "cloudflare:workers";
 
 import { app } from "../../src/worker/index";
-import { createIdentity } from "../../src/worker/identity";
+import { createIdentity } from "../../src/worker/modules/identity";
 
 export type TestAuthentication = Readonly<{ cookie: string; csrfToken: string }>;
 
 export async function loginAdministrator(): Promise<TestAuthentication> {
   const identity = createIdentity({ db: env.DB });
-  await identity.writeInitialSetup({
+  await identity.initialSetup.writeInitialSetup({
     displayEmail: "Admin@Example.com",
     token: "setup-secret",
     expiresAt: new Date(Date.now() + 30 * 60 * 1_000),
   });
-  await identity.completeInitialSetup({
+  await identity.initialSetup.completeInitialSetup({
     token: "setup-secret",
     password: "violet glacier orbits quietly 729",
   });
