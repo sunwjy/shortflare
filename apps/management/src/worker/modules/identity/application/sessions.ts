@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { timingSafeEqual } from "node:crypto";
 
-import { createPasswordVerifier, dummyVerifier, verifyPassword } from "../passwords";
+import { createPasswordVerifier, dummyVerifier, verifyPassword } from "./passwords";
 import { hashToken, parseUserEmail, toUser, type User } from "./shared";
 
 const idleDuration = 7 * 24 * 60 * 60 * 1_000;

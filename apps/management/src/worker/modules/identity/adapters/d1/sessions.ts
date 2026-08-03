@@ -4,8 +4,8 @@ import type {
   ReauthenticationSession,
   RequestSession,
   SessionPersistence,
-} from "./sessions";
-import type { User } from "./shared";
+} from "../../application/sessions";
+import type { User } from "../../application/shared";
 
 export function createD1SessionPersistence(database: D1Database): SessionPersistence {
   return {

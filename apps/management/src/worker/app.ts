@@ -5,12 +5,11 @@ import { Hono } from "hono";
 import { hasCapability } from "./access-control";
 import type { ManagementDependencies } from "./dependencies";
 import type { ManagementEnvironment } from "./environment";
-import { apiError } from "./http";
-import { createIdentity } from "./identity";
+import { createIdentity, type Identity } from "./modules/identity";
+import { createIdentityHttpRoutes } from "./modules/identity/http/routes";
 import { createLinksHttpRoutes } from "./modules/links/http/routes";
 import { healthResponse } from "./request-schemas";
-import { createAuthRoutes } from "./routes/auth";
-import { createUserRoutes } from "./routes/users";
+import type { RequestAuthentication } from "./transport/request-authentication";
 
 export function createManagementApp(dependencies: ManagementDependencies) {
   const app = new Hono<ManagementEnvironment>();
@@ -25,14 +24,13 @@ export function createManagementApp(dependencies: ManagementDependencies) {
 
   app.onError((error, context) => {
     console.error(error);
-    return context.json(apiError("internal-error"), 500);
+    return context.json({ ok: false, kind: "internal-error", details: {} } as const, 500);
   });
 
   app.get("/api/internal/health", (context) =>
     context.json(healthResponse.parse({ status: "ok" })),
   );
-  app.route("/api/internal/auth", createAuthRoutes(dependencies));
-  app.route("/api/internal/users", createUserRoutes(dependencies));
+  app.route("/api/internal", createIdentityHttpRoutes(dependencies));
   app.route("/api/internal", createLinksHttpRoutes(dependencies));
 
   return app;
@@ -45,30 +43,35 @@ const productionDependencies: ManagementDependencies = {
       persistence: createD1LinksPersistence(bindings.DB),
       redirectDomain: bindings.REDIRECT_DOMAIN,
     }),
-  createRequestAuthentication: (bindings) => {
-    const identity = createIdentity({ db: bindings.DB });
-    return {
-      async authenticateSafe(sessionToken) {
-        const result = await identity.authenticate(sessionToken);
-        return result.ok ? { ok: true, user: result.user } : { ok: false, kind: "unauthenticated" };
-      },
-      async authenticateMutation(input) {
-        const result = await identity.authenticateRequest(input.sessionToken, input.csrfToken);
-        if (!result.ok) {
-          return {
-            ok: false,
-            kind: result.kind === "invalid-credentials" ? "unauthenticated" : result.kind,
-          };
-        }
-        return {
-          ok: true,
-          user: result.user,
-          recentlyAuthenticated: result.recentlyAuthenticated,
-        };
-      },
-    };
-  },
+  createRequestAuthentication: (bindings) =>
+    createRequestAuthentication(createIdentity({ db: bindings.DB })),
   hasCapability,
 };
 
 export const app = createManagementApp(productionDependencies);
+
+function createRequestAuthentication(identity: Identity): RequestAuthentication {
+  return {
+    async authenticateSafe(sessionToken) {
+      const result = await identity.sessions.authenticate(sessionToken);
+      return result.ok ? { ok: true, user: result.user } : { ok: false, kind: "unauthenticated" };
+    },
+    async authenticateMutation(input) {
+      const result = await identity.sessions.authenticateRequest(
+        input.sessionToken,
+        input.csrfToken,
+      );
+      if (!result.ok) {
+        return {
+          ok: false,
+          kind: result.kind === "invalid-credentials" ? "unauthenticated" : result.kind,
+        };
+      }
+      return {
+        ok: true,
+        user: result.user,
+        recentlyAuthenticated: result.recentlyAuthenticated,
+      };
+    },
+  };
+}

@@ -51,13 +51,3 @@ export function toUser(record: User): User {
     state: record.state,
   };
 }
-
-export async function findUser(db: D1Database, userId: string) {
-  return db
-    .prepare(
-      `SELECT id, display_email AS email, role, state
-       FROM users WHERE id = ?`,
-    )
-    .bind(userId)
-    .first<User>();
-}

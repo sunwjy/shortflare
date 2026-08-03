@@ -1,5 +1,9 @@
-import type { CreateSessionRecord, CredentialUser, SessionPersistence } from "./sessions";
-import type { User } from "./shared";
+import type {
+  CreateSessionRecord,
+  CredentialUser,
+  SessionPersistence,
+} from "../../application/sessions";
+import type { User } from "../../application/shared";
 
 type StoredSession = CreateSessionRecord &
   Readonly<{ lastSeenAt: number; recentAuthenticationAt: number }>;

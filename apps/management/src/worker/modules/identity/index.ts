@@ -1,18 +1,18 @@
-import { createD1InitialSetupPersistence } from "./identity/d1-initial-setup";
-import { createD1InvitationPersistence } from "./identity/d1-invitations";
-import { createD1OperatorRecoveryPersistence } from "./identity/d1-operator-recovery";
-import { createD1PasswordResetPersistence } from "./identity/d1-password-resets";
-import { createD1SessionPersistence } from "./identity/d1-sessions";
-import { createD1UserPersistence } from "./identity/d1-users";
-import { createInitialSetup } from "./identity/initial-setup";
-import { createInvitations } from "./identity/invitations";
-import { createOperatorRecovery } from "./identity/operator-recovery";
-import { createPasswordResets } from "./identity/password-resets";
-import { createSessions } from "./identity/sessions";
-import { createRandomToken } from "./identity/shared";
-import { createUsers } from "./identity/users";
+import { createD1InitialSetupPersistence } from "./adapters/d1/initial-setup";
+import { createD1InvitationPersistence } from "./adapters/d1/invitations";
+import { createD1OperatorRecoveryPersistence } from "./adapters/d1/operator-recovery";
+import { createD1PasswordResetPersistence } from "./adapters/d1/password-resets";
+import { createD1SessionPersistence } from "./adapters/d1/sessions";
+import { createD1UserPersistence } from "./adapters/d1/users";
+import { createInitialSetup } from "./application/initial-setup";
+import { createInvitations } from "./application/invitations";
+import { createOperatorRecovery } from "./application/operator-recovery";
+import { createPasswordResets } from "./application/password-resets";
+import { createSessions } from "./application/sessions";
+import { createRandomToken } from "./application/shared";
+import { createUsers } from "./application/users";
 
-export type { User, UserRole, UserState } from "./identity/shared";
+export type { User, UserRole, UserState } from "./application/shared";
 
 type IdentityOptions = Readonly<{
   db: D1Database;
@@ -62,12 +62,12 @@ export function createIdentity(options: IdentityOptions) {
   });
 
   return {
-    ...initialSetup,
-    ...sessions,
-    ...invitations,
-    ...users,
-    ...passwordResets,
-    ...operatorRecovery,
+    initialSetup,
+    invitations,
+    operatorRecovery,
+    passwordResets,
+    sessions,
+    users,
   };
 }
 

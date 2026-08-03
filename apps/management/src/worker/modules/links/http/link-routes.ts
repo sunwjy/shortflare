@@ -1,8 +1,8 @@
 import { type Context, Hono } from "hono";
 
 import type { ManagementEnvironment } from "../../../environment";
-import { parseJson } from "../../../http";
 import { createAuthenticationMiddleware } from "../../../transport/authentication";
+import { parseJson } from "../../../transport/json";
 import { requireJsonRequestIntegrity } from "../../../transport/request-integrity";
 import type { LinksHttpDependencies } from "./dependencies";
 import { commandFailure, queryFailure, unexpectedCommand, unexpectedQuery } from "./errors";

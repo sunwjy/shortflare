@@ -1,4 +1,4 @@
-import { createPasswordVerifier } from "../passwords";
+import { createPasswordVerifier } from "./passwords";
 import { hashToken, type User } from "./shared";
 
 const passwordResetDuration = 30 * 60 * 1_000;

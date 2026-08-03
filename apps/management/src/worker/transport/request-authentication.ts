@@ -1,4 +1,4 @@
-import type { User } from "../identity";
+import type { User } from "../modules/identity";
 
 export type RequestAuthentication = Readonly<{
   authenticateSafe(

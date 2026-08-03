@@ -1,5 +1,5 @@
-import type { InvitationPersistence } from "./invitations";
-import type { User } from "./shared";
+import type { InvitationPersistence } from "../../application/invitations";
+import type { User } from "../../application/shared";
 
 type Invitation = Readonly<{
   expiresAt: number;

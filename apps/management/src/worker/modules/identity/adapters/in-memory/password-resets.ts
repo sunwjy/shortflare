@@ -1,5 +1,5 @@
-import type { PasswordResetPersistence } from "./password-resets";
-import type { User } from "./shared";
+import type { PasswordResetPersistence } from "../../application/password-resets";
+import type { User } from "../../application/shared";
 
 export function createInMemoryPasswordResetPersistence(
   seed: readonly User[],

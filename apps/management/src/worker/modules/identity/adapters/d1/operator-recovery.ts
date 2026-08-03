@@ -1,5 +1,5 @@
-import type { OperatorRecoveryPersistence } from "./operator-recovery";
-import type { User } from "./shared";
+import type { OperatorRecoveryPersistence } from "../../application/operator-recovery";
+import type { User } from "../../application/shared";
 
 export function createD1OperatorRecoveryPersistence(
   database: D1Database,

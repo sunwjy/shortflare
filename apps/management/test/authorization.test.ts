@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { type Capability, hasCapability } from "../src/worker/access-control";
-import type { User, UserRole } from "../src/worker/identity";
+import type { User, UserRole } from "../src/worker/modules/identity";
 
 describe("authorization", () => {
   it.each([

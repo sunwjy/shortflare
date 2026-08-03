@@ -2,7 +2,7 @@ import type { Links } from "@shortflare/links";
 
 import type { Capability } from "./access-control";
 import type { ManagementBindings } from "./environment";
-import type { Identity, User } from "./identity";
+import type { Identity, User } from "./modules/identity";
 import type { RequestAuthentication } from "./transport/request-authentication";
 
 export type ManagementDependencies = Readonly<{

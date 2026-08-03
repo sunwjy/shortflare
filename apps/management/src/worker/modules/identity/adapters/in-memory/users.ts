@@ -1,5 +1,5 @@
-import type { User } from "./shared";
-import type { UserPersistence } from "./users";
+import type { User } from "../../application/shared";
+import type { UserPersistence } from "../../application/users";
 
 export function createInMemoryUserPersistence(seed: readonly User[]): UserPersistence {
   const users = new Map(seed.map((user) => [user.id, structuredClone(user)]));

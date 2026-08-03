@@ -1,5 +1,5 @@
-import type { UserPersistence } from "./users";
-import type { User } from "./shared";
+import type { User } from "../../application/shared";
+import type { UserPersistence } from "../../application/users";
 
 /**
  * Persists User lifecycle changes with their Audit Event and Session revocation.

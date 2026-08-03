@@ -1,15 +1,15 @@
 import { type Context, Hono } from "hono";
 
-import type { ManagementDependencies } from "../dependencies";
-import type { ManagementEnvironment } from "../environment";
-import { parseJson } from "../http";
-import type { Identity } from "../identity";
-import { emptyRequest, invitationRequest, roleRequest } from "../request-schemas";
+import type { ManagementDependencies } from "../../../dependencies";
+import type { ManagementEnvironment } from "../../../environment";
 import {
   createAuthenticationMiddleware,
   type AuthenticationFailurePresenter,
-} from "../transport/authentication";
-import { requireJsonRequestIntegrity } from "../transport/request-integrity";
+} from "../../../transport/authentication";
+import { parseJson } from "../../../transport/json";
+import { requireJsonRequestIntegrity } from "../../../transport/request-integrity";
+import type { Identity } from "..";
+import { emptyRequest, invitationRequest, roleRequest } from "./schemas";
 
 const presentAuthenticationFailure: AuthenticationFailurePresenter = (context, kind, status) =>
   context.json({ ok: false, kind } as const, status);
@@ -36,7 +36,7 @@ export function createUserRoutes(
         const failure = authentication.ensureRecentAuthentication(context);
         if (failure) return failure;
       }
-      const result = await dependencies.createIdentity(context.env).issueInvitation({
+      const result = await dependencies.createIdentity(context.env).invitations.issueInvitation({
         actorId: context.var.authenticatedUser.id,
         ...request,
       });
@@ -51,7 +51,7 @@ export function createUserRoutes(
     async (context) =>
       context.json({
         ok: true as const,
-        users: await dependencies.createIdentity(context.env).listUsers(),
+        users: await dependencies.createIdentity(context.env).users.listUsers(),
       }),
   );
 
@@ -62,7 +62,7 @@ export function createUserRoutes(
     authentication.requireCapability("manage-users"),
     async (context) => {
       if (!(await parseEmptyRequest(context))) return invalidRequest(context);
-      const result = await dependencies.createIdentity(context.env).cancelInvitation({
+      const result = await dependencies.createIdentity(context.env).invitations.cancelInvitation({
         actorId: context.var.authenticatedUser.id,
         userId: context.req.param("userId"),
       });
@@ -79,10 +79,12 @@ export function createUserRoutes(
       if (!(await parseEmptyRequest(context))) return invalidRequest(context);
       const failure = authentication.ensureRecentAuthentication(context);
       if (failure) return failure;
-      const result = await dependencies.createIdentity(context.env).issuePasswordReset({
-        actorId: context.var.authenticatedUser.id,
-        userId: context.req.param("userId"),
-      });
+      const result = await dependencies
+        .createIdentity(context.env)
+        .passwordResets.issuePasswordReset({
+          actorId: context.var.authenticatedUser.id,
+          userId: context.req.param("userId"),
+        });
       return context.json(result, passwordResetStatus(result));
     },
   );
@@ -95,7 +97,7 @@ export function createUserRoutes(
     async (context) => {
       const request = await parseJson(context.req.raw, roleRequest);
       if (!request) return invalidRequest(context);
-      const result = await dependencies.createIdentity(context.env).changeRole({
+      const result = await dependencies.createIdentity(context.env).users.changeRole({
         actorId: context.var.authenticatedUser.id,
         userId: context.req.param("userId"),
         role: request.role,
@@ -112,7 +114,7 @@ export function createUserRoutes(
     authentication.requireCapability("manage-users"),
     async (context) => {
       if (!(await parseEmptyRequest(context))) return invalidRequest(context);
-      const result = await dependencies.createIdentity(context.env).suspendUser({
+      const result = await dependencies.createIdentity(context.env).users.suspendUser({
         actorId: context.var.authenticatedUser.id,
         userId: context.req.param("userId"),
         recentlyAuthenticated: context.var.recentlyAuthenticated,
@@ -128,7 +130,7 @@ export function createUserRoutes(
     authentication.requireCapability("manage-users"),
     async (context) => {
       if (!(await parseEmptyRequest(context))) return invalidRequest(context);
-      const result = await dependencies.createIdentity(context.env).reactivateUser({
+      const result = await dependencies.createIdentity(context.env).users.reactivateUser({
         actorId: context.var.authenticatedUser.id,
         userId: context.req.param("userId"),
       });
@@ -148,7 +150,7 @@ function invalidRequest(context: Context<ManagementEnvironment>) {
 }
 
 function invitationStatus(
-  result: Awaited<ReturnType<Identity["issueInvitation"]>>,
+  result: Awaited<ReturnType<Identity["invitations"]["issueInvitation"]>>,
 ): 201 | 400 | 409 {
   if (result.ok) return 201;
   switch (result.kind) {
@@ -161,7 +163,7 @@ function invitationStatus(
 }
 
 function passwordResetStatus(
-  result: Awaited<ReturnType<Identity["issuePasswordReset"]>>,
+  result: Awaited<ReturnType<Identity["passwordResets"]["issuePasswordReset"]>>,
 ): 201 | 404 | 409 {
   if (result.ok) return 201;
   switch (result.kind) {
@@ -174,8 +176,8 @@ function passwordResetStatus(
 
 function lifecycleStatus(
   result:
-    | Awaited<ReturnType<Identity["changeRole"]>>
-    | Awaited<ReturnType<Identity["suspendUser"]>>,
+    | Awaited<ReturnType<Identity["users"]["changeRole"]>>
+    | Awaited<ReturnType<Identity["users"]["suspendUser"]>>,
 ): 200 | 403 | 404 | 409 {
   if (result.ok) return 200;
   switch (result.kind) {

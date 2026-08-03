@@ -1,4 +1,4 @@
-import type { InitialSetupPersistence } from "./initial-setup";
+import type { InitialSetupPersistence } from "../../application/initial-setup";
 
 export function createInMemoryInitialSetupPersistence(): InitialSetupPersistence {
   let completed = false;

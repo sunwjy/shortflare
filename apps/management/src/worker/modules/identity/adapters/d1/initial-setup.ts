@@ -1,4 +1,4 @@
-import type { InitialSetupPersistence } from "./initial-setup";
+import type { InitialSetupPersistence } from "../../application/initial-setup";
 
 export function createD1InitialSetupPersistence(database: D1Database): InitialSetupPersistence {
   return {

@@ -1,4 +1,4 @@
-import { createPasswordVerifier } from "../passwords";
+import { createPasswordVerifier } from "./passwords";
 import { hashToken, parseUserEmail, toUser, type User, type UserRole } from "./shared";
 
 const invitationDuration = 24 * 60 * 60 * 1_000;

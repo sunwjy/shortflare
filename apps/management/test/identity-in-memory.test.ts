@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createInMemoryInvitationPersistence } from "../src/worker/identity/in-memory-invitations";
-import { createInvitations } from "../src/worker/identity/invitations";
+import { createInMemoryInvitationPersistence } from "../src/worker/modules/identity/adapters/in-memory/invitations";
+import { createInvitations } from "../src/worker/modules/identity/application/invitations";
 
 const now = new Date("2026-07-26T00:00:00.000Z");
 

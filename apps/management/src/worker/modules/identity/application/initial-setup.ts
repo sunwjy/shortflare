@@ -1,4 +1,4 @@
-import { createPasswordVerifier } from "../passwords";
+import { createPasswordVerifier } from "./passwords";
 import { hashToken, parseUserEmail, type User } from "./shared";
 
 export type InitialSetupPersistence = {

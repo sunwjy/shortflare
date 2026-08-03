@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { createInMemoryUserPersistence } from "../src/worker/identity/in-memory-users";
-import { createUsers } from "../src/worker/identity/users";
-import type { User } from "../src/worker/identity";
+import { createInMemoryUserPersistence } from "../src/worker/modules/identity/adapters/in-memory/users";
+import { createUsers } from "../src/worker/modules/identity/application/users";
+import type { User } from "../src/worker/modules/identity";
 
 const administrator: User = {
   id: "administrator",
