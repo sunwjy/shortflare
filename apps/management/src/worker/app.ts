@@ -7,9 +7,9 @@ import type { ManagementDependencies } from "./dependencies";
 import type { ManagementEnvironment } from "./environment";
 import { apiError } from "./http";
 import { createIdentity } from "./identity";
+import { createLinksHttpRoutes } from "./modules/links/http/routes";
 import { healthResponse } from "./request-schemas";
 import { createAuthRoutes } from "./routes/auth";
-import { createLinkRoutes } from "./routes/links";
 import { createUserRoutes } from "./routes/users";
 
 export function createManagementApp(dependencies: ManagementDependencies) {
@@ -33,7 +33,7 @@ export function createManagementApp(dependencies: ManagementDependencies) {
   );
   app.route("/api/internal/auth", createAuthRoutes(dependencies));
   app.route("/api/internal/users", createUserRoutes(dependencies));
-  app.route("/api/internal", createLinkRoutes(dependencies));
+  app.route("/api/internal", createLinksHttpRoutes(dependencies));
 
   return app;
 }
