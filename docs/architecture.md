@@ -350,6 +350,15 @@ SQL migrations, and D1 adapters required by Links and Analytics. Its interface
 constructs adapters from a D1 binding; it does not export tables as an
 application-wide data model.
 
+Production persistence adapters execute through a typed Drizzle D1 client.
+Ordinary reads and writes use the SQL-like Query Builder; parameterized `sql`
+templates are reserved for atomic guards and queries whose invariants are
+clearer in SQL. Adapters retain existing D1 batch semantics through
+`db.batch()` and do not call the underlying D1 client directly. The server-only
+`@shortflare/database/d1` subpath exposes the client factory and schema solely
+to D1 adapter implementations; transport, application, and domain modules do
+not import it.
+
 Drizzle is preferred over MikroORM because Drizzle directly supports D1,
 Workers, and the D1 Batch API. MikroORM's D1 support is experimental and loses
 the transaction-backed Unit of Work behavior that normally justifies its
@@ -808,3 +817,14 @@ require a new top-level package by default.
 
 - [ADR-0001: Split redirect and management into separate Workers](./adr/0001-split-redirect-and-management-workers.md)
 - [ADR-0002: Use durable analytics by default](./adr/0002-use-durable-analytics-by-default.md)
+- [ADR-0003: Use native scrypt for password hashing](./adr/0003-use-native-scrypt-for-password-hashing.md)
+- [ADR-0004: Preserve Aliases through archival](./adr/0004-preserve-aliases-through-archival.md)
+- [ADR-0005: Use one D1 database per Instance](./adr/0005-use-one-d1-database-per-instance.md)
+- [ADR-0006: Retain activated Users](./adr/0006-retain-activated-users.md)
+- [ADR-0007: Bootstrap through a D1 handoff](./adr/0007-bootstrap-through-a-d1-handoff.md)
+- [ADR-0008: Recover Administrators through a D1 handoff](./adr/0008-recover-administrators-through-a-d1-handoff.md)
+- [ADR-0009: Edit a Link atomically](./adr/0009-edit-links-atomically.md)
+- [ADR-0010: Reject stale Link mutations](./adr/0010-reject-stale-link-mutations.md)
+- [ADR-0011: Own the Management UI through shadcn, Tailwind, and TanStack Form](./adr/0011-own-ui-components-through-shadcn-and-base-ui.md)
+- [ADR-0012: Organize the Management backend by capability](./adr/0012-organize-management-backend-by-capability.md)
+- [ADR-0013: Standardize runtime D1 access through Drizzle](./adr/0013-standardize-runtime-d1-access-through-drizzle.md)
