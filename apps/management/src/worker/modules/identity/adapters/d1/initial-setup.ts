@@ -1,69 +1,83 @@
-import type { InitialSetupPersistence } from "../../application/initial-setup";
+import { databaseSchema, type ShortflareDatabase } from "@shortflare/database/d1";
+import { and, eq, exists, gt, isNull, notExists, sql } from "drizzle-orm";
 
-export function createD1InitialSetupPersistence(database: D1Database): InitialSetupPersistence {
+import type { InitialSetupPersistence } from "../../application/initial-setup";
+import { first, toDate } from "./shared";
+
+export function createD1InitialSetupPersistence(
+  database: ShortflareDatabase,
+): InitialSetupPersistence {
+  const activeAdministrator = database
+    .select({ value: sql`1` })
+    .from(databaseSchema.users)
+    .where(
+      and(eq(databaseSchema.users.state, "active"), eq(databaseSchema.users.role, "administrator")),
+    );
+
   return {
     async isAvailable() {
-      const result = await database
-        .prepare(
-          `SELECT
-             instances.setup_completed_at AS setupCompletedAt,
-             EXISTS (
-               SELECT 1 FROM users
-               WHERE state = 'active' AND role = 'administrator'
-             ) AS hasActiveAdministrator
-           FROM instances WHERE singleton_key = 1`,
-        )
-        .first<{ setupCompletedAt: number | null; hasActiveAdministrator: number }>();
-      return Boolean(
-        result && result.setupCompletedAt === null && result.hasActiveAdministrator !== 1,
+      const result = first(
+        await database
+          .select({
+            setupCompletedAt: databaseSchema.instances.setupCompletedAt,
+            hasActiveAdministrator: exists(activeAdministrator),
+          })
+          .from(databaseSchema.instances)
+          .where(eq(databaseSchema.instances.singletonKey, 1))
+          .limit(1),
       );
+      return Boolean(result && result.setupCompletedAt === null && !result.hasActiveAdministrator);
     },
     async write(input) {
+      const setupAvailable = and(
+        eq(databaseSchema.instances.singletonKey, 1),
+        isNull(databaseSchema.instances.setupCompletedAt),
+        notExists(activeAdministrator),
+      );
       await database.batch([
-        database.prepare(
-          `DELETE FROM initial_setup
-           WHERE singleton_key = 1
-             AND EXISTS (
-               SELECT 1 FROM instances
-               WHERE singleton_key = 1 AND setup_completed_at IS NULL
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM users
-               WHERE state = 'active' AND role = 'administrator'
-             )`,
-        ),
-        database
-          .prepare(
-            `INSERT INTO initial_setup
-               (singleton_key, display_email, normalized_email, token_hash, created_at, expires_at)
-             SELECT 1, ?, ?, ?, ?, ?
-             WHERE EXISTS (
-               SELECT 1 FROM instances
-               WHERE singleton_key = 1 AND setup_completed_at IS NULL
-             )
-             AND NOT EXISTS (
-               SELECT 1 FROM users
-               WHERE state = 'active' AND role = 'administrator'
-             )`,
-          )
-          .bind(
-            input.displayEmail,
-            input.normalizedEmail,
-            input.tokenHash,
-            input.createdAt,
-            input.expiresAt,
+        database.delete(databaseSchema.initialSetup).where(
+          and(
+            eq(databaseSchema.initialSetup.singletonKey, 1),
+            exists(
+              database
+                .select({ value: sql`1` })
+                .from(databaseSchema.instances)
+                .where(setupAvailable),
+            ),
           ),
+        ),
+        database.insert(databaseSchema.initialSetup).select(
+          database
+            .select({
+              singletonKey: sql<number>`1`.as("singleton_key"),
+              displayEmail: sql<string>`${input.displayEmail}`.as("display_email"),
+              normalizedEmail: sql<string>`${input.normalizedEmail}`.as("normalized_email"),
+              tokenHash: sql<string>`${input.tokenHash}`.as("token_hash"),
+              createdAt: sql<Date>`${input.createdAt}`.as("created_at"),
+              expiresAt: sql<Date>`${input.expiresAt}`.as("expires_at"),
+            })
+            .from(databaseSchema.instances)
+            .where(setupAvailable),
+        ),
       ]);
     },
-    find(tokenHash, occurredAt) {
-      return database
-        .prepare(
-          `SELECT display_email AS displayEmail, normalized_email AS normalizedEmail
-           FROM initial_setup
-           WHERE singleton_key = 1 AND token_hash = ? AND expires_at > ?`,
-        )
-        .bind(tokenHash, occurredAt)
-        .first<{ displayEmail: string; normalizedEmail: string }>();
+    async find(tokenHash, occurredAt) {
+      return first(
+        await database
+          .select({
+            displayEmail: databaseSchema.initialSetup.displayEmail,
+            normalizedEmail: databaseSchema.initialSetup.normalizedEmail,
+          })
+          .from(databaseSchema.initialSetup)
+          .where(
+            and(
+              eq(databaseSchema.initialSetup.singletonKey, 1),
+              eq(databaseSchema.initialSetup.tokenHash, tokenHash),
+              gt(databaseSchema.initialSetup.expiresAt, toDate(occurredAt)),
+            ),
+          )
+          .limit(1),
+      );
     },
     async complete(input) {
       // ADR-0007 requires one atomic handoff consumption: the first Administrator,
@@ -71,46 +85,46 @@ export function createD1InitialSetupPersistence(database: D1Database): InitialSe
       try {
         await database.batch([
           database
-            .prepare(
-              `DELETE FROM initial_setup
-               WHERE singleton_key = 1 AND token_hash = ? AND expires_at > ?`,
-            )
-            .bind(input.tokenHash, input.occurredAt),
-          database
-            .prepare(
-              `INSERT INTO users
-                 (id, display_email, normalized_email, state, role, activated_at, created_at, updated_at)
-               VALUES (?, ?, ?, 'active', 'administrator', ?, ?, ?)`,
-            )
-            .bind(
-              input.userId,
-              input.displayEmail,
-              input.normalizedEmail,
-              input.occurredAt,
-              input.occurredAt,
-              input.occurredAt,
+            .delete(databaseSchema.initialSetup)
+            .where(
+              and(
+                eq(databaseSchema.initialSetup.singletonKey, 1),
+                eq(databaseSchema.initialSetup.tokenHash, input.tokenHash),
+                gt(databaseSchema.initialSetup.expiresAt, toDate(input.occurredAt)),
+              ),
             ),
+          database.insert(databaseSchema.users).values({
+            id: input.userId,
+            displayEmail: input.displayEmail,
+            normalizedEmail: input.normalizedEmail,
+            state: "active",
+            role: "administrator",
+            activatedAt: toDate(input.occurredAt),
+            createdAt: toDate(input.occurredAt),
+            updatedAt: toDate(input.occurredAt),
+          }),
+          database.insert(databaseSchema.credentials).values({
+            userId: input.userId,
+            verifier: input.verifier,
+            updatedAt: toDate(input.occurredAt),
+          }),
           database
-            .prepare("INSERT INTO credentials (user_id, verifier, updated_at) VALUES (?, ?, ?)")
-            .bind(input.userId, input.verifier, input.occurredAt),
-          database
-            .prepare(
-              `UPDATE instances SET setup_completed_at = ?
-               WHERE singleton_key = 1 AND setup_completed_at IS NULL`,
-            )
-            .bind(input.occurredAt),
-          database
-            .prepare(
-              `INSERT INTO audit_events
-                 (id, actor_id, action, subject_id, occurred_at, metadata)
-               VALUES (?, 'system', 'initial-administrator-activate', ?, ?, ?)`,
-            )
-            .bind(
-              input.auditId,
-              input.userId,
-              input.occurredAt,
-              JSON.stringify({ toRole: "administrator", toUserState: "active" }),
+            .update(databaseSchema.instances)
+            .set({ setupCompletedAt: toDate(input.occurredAt) })
+            .where(
+              and(
+                eq(databaseSchema.instances.singletonKey, 1),
+                isNull(databaseSchema.instances.setupCompletedAt),
+              ),
             ),
+          database.insert(databaseSchema.auditEvents).values({
+            id: input.auditId,
+            actorId: "system",
+            action: "initial-administrator-activate",
+            subjectId: input.userId,
+            occurredAt: toDate(input.occurredAt),
+            metadata: { toRole: "administrator", toUserState: "active" },
+          }),
         ]);
         return true;
       } catch {

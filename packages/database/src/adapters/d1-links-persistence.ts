@@ -1,5 +1,9 @@
-import type { LinksPersistence, PersistedLinkMutation } from "@shortflare/links/persistence";
 import { foldCase } from "@shortflare/links";
+import type { LinksPersistence, PersistedLinkMutation } from "@shortflare/links/persistence";
+import { and, eq, exists, ne, sql } from "drizzle-orm";
+
+import { createD1Database, databaseSchema } from "../d1";
+import { listDestinationVersions, listLinks, listReservedAliases } from "./d1-links-pagination";
 import {
   assertAlias,
   changes,
@@ -13,7 +17,6 @@ import {
   unchanged,
   updated,
 } from "./d1-links-records";
-import { listDestinationVersions, listLinks, listReservedAliases } from "./d1-links-pagination";
 
 type PermanentlyDeleteResult = Awaited<ReturnType<LinksPersistence["permanentlyDelete"]>>;
 
@@ -30,9 +33,10 @@ export type CreateD1LinksPersistenceOptions = Readonly<{
  * either condition as a domain result.
  */
 export function createD1LinksPersistence(
-  database: D1Database,
+  binding: D1Database,
   options: CreateD1LinksPersistenceOptions = {},
 ): LinksPersistence {
+  const database = createD1Database(binding);
   const generateAuditId = options.generateAuditId ?? (() => crypto.randomUUID());
 
   return {
@@ -49,39 +53,27 @@ export function createD1LinksPersistence(
 
       try {
         await database.batch([
-          database
-            .prepare(
-              `INSERT INTO links
-                 (id, title, search_title, state, revision, created_at, updated_at)
-               VALUES (?, ?, ?, ?, 0, ?, ?)`,
-            )
-            .bind(
-              link.id,
-              link.title,
-              foldCase(link.title),
-              link.state,
-              link.createdAt.getTime(),
-              link.updatedAt.getTime(),
-            ),
-          database
-            .prepare(
-              `INSERT INTO aliases
-                 (alias, search_alias, link_id, deleted_link_id, reserved_at)
-               VALUES (?, ?, ?, NULL, NULL)`,
-            )
-            .bind(link.alias, foldCase(link.alias), link.id),
-          database
-            .prepare(
-              `INSERT INTO destination_versions
-                 (id, link_id, version_number, destination, created_at)
-               VALUES (?, ?, 1, ?, ?)`,
-            )
-            .bind(
-              destinationVersion.id,
-              link.id,
-              destinationVersion.destination,
-              destinationVersion.createdAt.getTime(),
-            ),
+          database.insert(databaseSchema.links).values({
+            id: link.id,
+            title: link.title,
+            searchTitle: foldCase(link.title),
+            state: link.state,
+            revision: 0,
+            createdAt: link.createdAt,
+            updatedAt: link.updatedAt,
+          }),
+          database.insert(databaseSchema.aliases).values({
+            alias: link.alias,
+            searchAlias: foldCase(link.alias),
+            linkId: link.id,
+          }),
+          database.insert(databaseSchema.destinationVersions).values({
+            id: destinationVersion.id,
+            linkId: link.id,
+            versionNumber: 1,
+            destination: destinationVersion.destination,
+            createdAt: destinationVersion.createdAt,
+          }),
           insertAuditEvent(database, generateAuditId(), context, link.id, {
             alias: link.alias,
           }),
@@ -97,39 +89,40 @@ export function createD1LinksPersistence(
     },
 
     async findByAlias(alias) {
-      return readStoredLink(database, "a.alias = ?", alias).then((stored) =>
-        stored === null ? null : stored.link,
-      );
+      const stored = await readStoredLink(database, { kind: "alias", value: alias });
+      return stored?.link ?? null;
     },
 
     async findById(id) {
-      return readStoredLink(database, "l.id = ?", id).then((stored) =>
-        stored === null ? null : stored.link,
-      );
+      const stored = await readStoredLink(database, { kind: "id", value: id });
+      return stored?.link ?? null;
     },
 
     async findReservedAlias(alias) {
-      const row = await database
-        .prepare(
-          `SELECT
-             alias,
-             deleted_link_id AS deletedLinkId,
-             reserved_at AS reservedAt
-           FROM aliases
-           WHERE alias = ? AND link_id IS NULL`,
+      const rows = await database
+        .select({
+          alias: databaseSchema.aliases.alias,
+          deletedLinkId: databaseSchema.aliases.deletedLinkId,
+          reservedAt: databaseSchema.aliases.reservedAt,
+        })
+        .from(databaseSchema.aliases)
+        .where(
+          and(
+            eq(databaseSchema.aliases.alias, alias),
+            sql`${databaseSchema.aliases.linkId} IS NULL`,
+          ),
         )
-        .bind(alias)
-        .first<{
-          alias: string;
-          deletedLinkId: string;
-          reservedAt: number;
-        }>();
-      if (row === null) return null;
+        .limit(1);
+      const row = rows[0];
+      if (row === undefined) return null;
+      if (row.deletedLinkId === null || row.reservedAt === null) {
+        throw new Error(`Reserved Alias ${row.alias} is incomplete`);
+      }
 
       return {
         alias: assertAlias(row.alias),
         deletedLinkId: row.deletedLinkId,
-        reservedAt: new Date(row.reservedAt),
+        reservedAt: row.reservedAt,
       };
     },
 
@@ -150,39 +143,43 @@ export function createD1LinksPersistence(
           }
 
           const results = await database.batch([
+            database.insert(databaseSchema.auditEvents).select(
+              database
+                .select({
+                  id: sql<string>`${generateAuditId()}`.as("id"),
+                  actorId: sql<string>`${context.actor.id}`.as("actor_id"),
+                  action: sql<typeof context.action>`${context.action}`.as("action"),
+                  subjectId: databaseSchema.links.id,
+                  occurredAt: sql<Date>`${context.occurredAt.getTime()}`.as("occurred_at"),
+                  metadata: sql<{
+                    fromState: typeof stored.link.state;
+                    toState: typeof target;
+                  }>`${JSON.stringify({ fromState: stored.link.state, toState: target })}`.as(
+                    "metadata",
+                  ),
+                })
+                .from(databaseSchema.links)
+                .where(
+                  and(
+                    eq(databaseSchema.links.id, linkId),
+                    eq(databaseSchema.links.revision, stored.revision),
+                    eq(databaseSchema.links.state, stored.link.state),
+                  ),
+                ),
+            ),
             database
-              .prepare(
-                `INSERT INTO audit_events
-                 (id, actor_id, action, subject_id, occurred_at, metadata)
-               SELECT ?, ?, ?, id, ?, ?
-               FROM links
-               WHERE id = ? AND revision = ? AND state = ?`,
-              )
-              .bind(
-                generateAuditId(),
-                context.actor.id,
-                context.action,
-                context.occurredAt.getTime(),
-                JSON.stringify({
-                  fromState: stored.link.state,
-                  toState: target,
-                }),
-                linkId,
-                stored.revision,
-                stored.link.state,
-              ),
-            database
-              .prepare(
-                `UPDATE links
-               SET state = ?, updated_at = ?, revision = revision + 1
-               WHERE id = ? AND revision = ? AND state = ?`,
-              )
-              .bind(
-                target,
-                context.occurredAt.getTime(),
-                linkId,
-                stored.revision,
-                stored.link.state,
+              .update(databaseSchema.links)
+              .set({
+                state: target,
+                updatedAt: context.occurredAt,
+                revision: sql`${databaseSchema.links.revision} + 1`,
+              })
+              .where(
+                and(
+                  eq(databaseSchema.links.id, linkId),
+                  eq(databaseSchema.links.revision, stored.revision),
+                  eq(databaseSchema.links.state, stored.link.state),
+                ),
               ),
             ...readLinkStatements(database, linkId),
           ]);
@@ -217,67 +214,85 @@ export function createD1LinksPersistence(
           if (!titleChanged && !destinationChanged) return unchanged(stored.link);
 
           const changedFields = [
-            ...(titleChanged ? ["title"] : []),
-            ...(destinationChanged ? ["destination"] : []),
+            ...(titleChanged ? (["title"] as const) : []),
+            ...(destinationChanged ? (["destination"] as const) : []),
           ];
           const metadata = {
             changedFields,
             ...(destinationChanged ? { destinationVersionId: values.destinationVersion!.id } : {}),
           };
-          const statements: D1PreparedStatement[] = [
+          const audit = database.insert(databaseSchema.auditEvents).select(
             database
-              .prepare(
-                `INSERT INTO audit_events
-                   (id, actor_id, action, subject_id, occurred_at, metadata)
-                 SELECT ?, ?, ?, id, ?, ?
-                 FROM links
-                 WHERE id = ? AND revision = ? AND state != 'archived'`,
-              )
-              .bind(
-                generateAuditId(),
-                context.actor.id,
-                context.action,
-                context.occurredAt.getTime(),
-                JSON.stringify(metadata),
-                linkId,
-                stored.revision,
-              ),
-          ];
-          if (destinationChanged) {
-            statements.push(
-              database
-                .prepare(
-                  `INSERT INTO destination_versions
-                     (id, link_id, version_number, destination, created_at)
-                   SELECT ?, id, ?, ?, ?
-                   FROM links
-                   WHERE id = ? AND revision = ? AND state != 'archived'`,
-                )
-                .bind(
-                  values.destinationVersion!.id,
-                  stored.currentVersionNumber + 1,
-                  values.destinationVersion!.destination,
-                  values.destinationVersion!.createdAt.getTime(),
-                  linkId,
-                  stored.revision,
+              .select({
+                id: sql<string>`${generateAuditId()}`.as("id"),
+                actorId: sql<string>`${context.actor.id}`.as("actor_id"),
+                action: sql<typeof context.action>`${context.action}`.as("action"),
+                subjectId: databaseSchema.links.id,
+                occurredAt: sql<Date>`${context.occurredAt.getTime()}`.as("occurred_at"),
+                metadata: sql<typeof metadata>`${JSON.stringify(metadata)}`.as("metadata"),
+              })
+              .from(databaseSchema.links)
+              .where(
+                and(
+                  eq(databaseSchema.links.id, linkId),
+                  eq(databaseSchema.links.revision, stored.revision),
+                  ne(databaseSchema.links.state, "archived"),
                 ),
-            );
-          }
-          const updateIndex = statements.length;
-          statements.push(
-            database
-              .prepare(
-                `UPDATE links
-                 SET title = ?, search_title = ?, updated_at = ?,
-                     revision = revision + 1
-                 WHERE id = ? AND revision = ? AND state != 'archived'`,
-              )
-              .bind(title, foldCase(title), context.occurredAt.getTime(), linkId, stored.revision),
-            ...readLinkStatements(database, linkId),
+              ),
           );
-          const results = await database.batch(statements);
-          if (changes(results[updateIndex]) === 1) {
-            return updated(hydrateBatchLink(results, updateIndex + 1, updateIndex + 2));
+          const update = database
+            .update(databaseSchema.links)
+            .set({
+              title,
+              searchTitle: foldCase(title),
+              updatedAt: context.occurredAt,
+              revision: sql`${databaseSchema.links.revision} + 1`,
+            })
+            .where(
+              and(
+                eq(databaseSchema.links.id, linkId),
+                eq(databaseSchema.links.revision, stored.revision),
+                ne(databaseSchema.links.state, "archived"),
+              ),
+            );
+          const reads = readLinkStatements(database, linkId);
+
+          if (destinationChanged) {
+            const destination = values.destinationVersion!;
+            const results = await database.batch([
+              audit,
+              database.insert(databaseSchema.destinationVersions).select(
+                database
+                  .select({
+                    id: sql<string>`${destination.id}`.as("id"),
+                    linkId: databaseSchema.links.id,
+                    versionNumber: sql<number>`${stored.currentVersionNumber + 1}`.as(
+                      "version_number",
+                    ),
+                    destination: sql<string>`${destination.destination}`.as("destination"),
+                    createdAt: sql<Date>`${destination.createdAt.getTime()}`.as("created_at"),
+                  })
+                  .from(databaseSchema.links)
+                  .where(
+                    and(
+                      eq(databaseSchema.links.id, linkId),
+                      eq(databaseSchema.links.revision, stored.revision),
+                      ne(databaseSchema.links.state, "archived"),
+                    ),
+                  ),
+              ),
+              update,
+              ...reads,
+            ]);
+            if (changes(results[2]) === 1) {
+              return updated(hydrateBatchLink(results, 3, 4));
+            }
+            return retryMutation;
+          }
+
+          const results = await database.batch([audit, update, ...reads]);
+          if (changes(results[1]) === 1) {
+            return updated(hydrateBatchLink(results, 2, 3));
           }
           return retryMutation;
         },
@@ -301,41 +316,55 @@ export function createD1LinksPersistence(
             return { kind: "invalid-state", state: stored.link.state };
           }
 
-          const results = await database.batch([
-            database
-              .prepare(
-                `INSERT INTO audit_events
-                 (id, actor_id, action, subject_id, occurred_at, metadata)
-               SELECT ?, ?, ?, l.id, ?, ?
-               FROM links l
-               WHERE l.id = ? AND l.revision = ? AND l.state = 'archived'`,
-              )
-              .bind(
-                generateAuditId(),
-                context.actor.id,
-                context.action,
-                context.occurredAt.getTime(),
-                JSON.stringify({ alias: stored.link.alias }),
-                linkId,
-                stored.revision,
+          const guardedLink = database
+            .select({ value: sql`1` })
+            .from(databaseSchema.links)
+            .where(
+              and(
+                eq(databaseSchema.links.id, linkId),
+                eq(databaseSchema.links.revision, stored.revision),
+                eq(databaseSchema.links.state, "archived"),
               ),
+            );
+          const results = await database.batch([
+            database.insert(databaseSchema.auditEvents).select(
+              database
+                .select({
+                  id: sql<string>`${generateAuditId()}`.as("id"),
+                  actorId: sql<string>`${context.actor.id}`.as("actor_id"),
+                  action: sql<typeof context.action>`${context.action}`.as("action"),
+                  subjectId: databaseSchema.links.id,
+                  occurredAt: sql<Date>`${context.occurredAt.getTime()}`.as("occurred_at"),
+                  metadata: sql<{ alias: string }>`${JSON.stringify({
+                    alias: stored.link.alias,
+                  })}`.as("metadata"),
+                })
+                .from(databaseSchema.links)
+                .where(
+                  and(
+                    eq(databaseSchema.links.id, linkId),
+                    eq(databaseSchema.links.revision, stored.revision),
+                    eq(databaseSchema.links.state, "archived"),
+                  ),
+                ),
+            ),
             database
-              .prepare(
-                `UPDATE aliases
-               SET link_id = NULL, deleted_link_id = ?, reserved_at = ?
-               WHERE link_id = ?
-                 AND EXISTS (
-                   SELECT 1 FROM links
-                   WHERE id = ? AND revision = ? AND state = 'archived'
-                 )`,
-              )
-              .bind(linkId, context.occurredAt.getTime(), linkId, linkId, stored.revision),
+              .update(databaseSchema.aliases)
+              .set({
+                linkId: null,
+                deletedLinkId: linkId,
+                reservedAt: context.occurredAt,
+              })
+              .where(and(eq(databaseSchema.aliases.linkId, linkId), exists(guardedLink))),
             database
-              .prepare(
-                `DELETE FROM links
-               WHERE id = ? AND revision = ? AND state = 'archived'`,
-              )
-              .bind(linkId, stored.revision),
+              .delete(databaseSchema.links)
+              .where(
+                and(
+                  eq(databaseSchema.links.id, linkId),
+                  eq(databaseSchema.links.revision, stored.revision),
+                  eq(databaseSchema.links.state, "archived"),
+                ),
+              ),
           ]);
           if (changes(results[2]) > 0) {
             return {
@@ -355,23 +384,32 @@ export function createD1LinksPersistence(
 
     async releaseReservedAlias(alias, context) {
       const results = await database.batch([
+        database.insert(databaseSchema.auditEvents).select(
+          database
+            .select({
+              id: sql<string>`${generateAuditId()}`.as("id"),
+              actorId: sql<string>`${context.actor.id}`.as("actor_id"),
+              action: sql<typeof context.action>`${context.action}`.as("action"),
+              subjectId: sql<string>`${databaseSchema.aliases.deletedLinkId}`.as("subject_id"),
+              occurredAt: sql<Date>`${context.occurredAt.getTime()}`.as("occurred_at"),
+              metadata: sql<{ alias: string }>`${JSON.stringify({ alias })}`.as("metadata"),
+            })
+            .from(databaseSchema.aliases)
+            .where(
+              and(
+                eq(databaseSchema.aliases.alias, alias),
+                sql`${databaseSchema.aliases.linkId} IS NULL`,
+              ),
+            ),
+        ),
         database
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, ?, ?, deleted_link_id, ?, ?
-             FROM aliases
-             WHERE alias = ? AND link_id IS NULL`,
-          )
-          .bind(
-            generateAuditId(),
-            context.actor.id,
-            context.action,
-            context.occurredAt.getTime(),
-            JSON.stringify({ alias }),
-            alias,
+          .delete(databaseSchema.aliases)
+          .where(
+            and(
+              eq(databaseSchema.aliases.alias, alias),
+              sql`${databaseSchema.aliases.linkId} IS NULL`,
+            ),
           ),
-        database.prepare("DELETE FROM aliases WHERE alias = ? AND link_id IS NULL").bind(alias),
       ]);
       return changes(results[1]) === 1 ? "released" : "not-found";
     },

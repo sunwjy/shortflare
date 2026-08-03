@@ -1,6 +1,10 @@
 import type { Alias, DestinationVersion, Link, LinkState, LinkSummary } from "@shortflare/links";
-import type { LinkMutationContext, PersistedLinkMutation } from "@shortflare/links/persistence";
 import { parseAlias } from "@shortflare/links";
+import type { LinkMutationContext, PersistedLinkMutation } from "@shortflare/links/persistence";
+import { desc, eq } from "drizzle-orm";
+
+import { databaseSchema, type ShortflareDatabase } from "../d1";
+import type { AuditMetadata } from "../schema";
 
 type LinkRow = {
   id: string;
@@ -8,15 +12,15 @@ type LinkRow = {
   title: string;
   state: LinkState;
   revision: number;
-  createdAt: number;
-  updatedAt: number;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export type DestinationVersionRow = {
   id: string;
   destination: string;
   versionNumber: number;
-  createdAt: number;
+  createdAt: Date;
 };
 
 export type StoredLink = Readonly<{
@@ -25,63 +29,62 @@ export type StoredLink = Readonly<{
   currentVersionNumber: number;
 }>;
 
-export type LinkSummarySqlRow = {
-  id: string;
-  alias: string;
-  title: string;
-  state: LinkState;
-  revision: number;
-  createdAt: number;
-  updatedAt: number;
+export type LinkSummarySqlRow = LinkRow & {
   destinationVersionId: string;
   destination: string;
   versionNumber: number;
-  destinationCreatedAt: number;
+  destinationCreatedAt: Date;
 };
+
+type LinkLookup =
+  | Readonly<{ kind: "alias"; value: Alias }>
+  | Readonly<{ kind: "id"; value: string }>;
 
 export const retryMutation = Symbol("retry-mutation");
 const maximumMutationAttempts = 3;
 
 export async function readStoredLink(
-  database: D1Database,
-  condition: "a.alias = ?" | "l.id = ?",
-  value: string,
+  database: ShortflareDatabase,
+  lookup: LinkLookup,
 ): Promise<StoredLink | null> {
+  const predicate =
+    lookup.kind === "alias"
+      ? eq(databaseSchema.aliases.alias, lookup.value)
+      : eq(databaseSchema.links.id, lookup.value);
   const results = await database.batch([
     database
-      .prepare(
-        `SELECT
-           l.id,
-           a.alias,
-           l.title,
-           l.state,
-           l.revision,
-           l.created_at AS createdAt,
-           l.updated_at AS updatedAt
-         FROM links l
-         JOIN aliases a ON a.link_id = l.id
-         WHERE ${condition}`,
-      )
-      .bind(value),
+      .select({
+        id: databaseSchema.links.id,
+        alias: databaseSchema.aliases.alias,
+        title: databaseSchema.links.title,
+        state: databaseSchema.links.state,
+        revision: databaseSchema.links.revision,
+        createdAt: databaseSchema.links.createdAt,
+        updatedAt: databaseSchema.links.updatedAt,
+      })
+      .from(databaseSchema.links)
+      .innerJoin(databaseSchema.aliases, eq(databaseSchema.aliases.linkId, databaseSchema.links.id))
+      .where(predicate),
     database
-      .prepare(
-        `SELECT
-           dv.id,
-           dv.destination,
-           dv.version_number AS versionNumber,
-           dv.created_at AS createdAt
-         FROM destination_versions dv
-         JOIN links l ON l.id = dv.link_id
-         JOIN aliases a ON a.link_id = l.id
-         WHERE ${condition}
-         ORDER BY dv.version_number DESC
-         LIMIT 1`,
+      .select({
+        id: databaseSchema.destinationVersions.id,
+        destination: databaseSchema.destinationVersions.destination,
+        versionNumber: databaseSchema.destinationVersions.versionNumber,
+        createdAt: databaseSchema.destinationVersions.createdAt,
+      })
+      .from(databaseSchema.destinationVersions)
+      .innerJoin(
+        databaseSchema.links,
+        eq(databaseSchema.links.id, databaseSchema.destinationVersions.linkId),
       )
-      .bind(value),
+      .innerJoin(databaseSchema.aliases, eq(databaseSchema.aliases.linkId, databaseSchema.links.id))
+      .where(predicate)
+      .orderBy(desc(databaseSchema.destinationVersions.versionNumber))
+      .limit(1),
   ]);
-  const linkRow = rows<LinkRow>(results[0])[0];
+  const linkRow = results[0][0];
   if (linkRow === undefined) return null;
-  const versionRows = rows<DestinationVersionRow>(results[1]);
+  const versionRows = results[1];
   if (versionRows.length === 0) {
     throw new Error(`Link ${linkRow.id} has no Destination Version`);
   }
@@ -94,41 +97,37 @@ export async function readStoredLink(
   };
 }
 
-export function readLinkStatements(database: D1Database, linkId: string) {
+export function readLinkStatements(database: ShortflareDatabase, linkId: string) {
   return [
     database
-      .prepare(
-        `SELECT
-           l.id,
-           a.alias,
-           l.title,
-           l.state,
-           l.revision,
-           l.created_at AS createdAt,
-           l.updated_at AS updatedAt
-         FROM links l
-         JOIN aliases a ON a.link_id = l.id
-         WHERE l.id = ?`,
-      )
-      .bind(linkId),
+      .select({
+        id: databaseSchema.links.id,
+        alias: databaseSchema.aliases.alias,
+        title: databaseSchema.links.title,
+        state: databaseSchema.links.state,
+        revision: databaseSchema.links.revision,
+        createdAt: databaseSchema.links.createdAt,
+        updatedAt: databaseSchema.links.updatedAt,
+      })
+      .from(databaseSchema.links)
+      .innerJoin(databaseSchema.aliases, eq(databaseSchema.aliases.linkId, databaseSchema.links.id))
+      .where(eq(databaseSchema.links.id, linkId)),
     database
-      .prepare(
-        `SELECT
-           id,
-           destination,
-           version_number AS versionNumber,
-           created_at AS createdAt
-         FROM destination_versions
-         WHERE link_id = ?
-         ORDER BY version_number DESC
-         LIMIT 1`,
-      )
-      .bind(linkId),
+      .select({
+        id: databaseSchema.destinationVersions.id,
+        destination: databaseSchema.destinationVersions.destination,
+        versionNumber: databaseSchema.destinationVersions.versionNumber,
+        createdAt: databaseSchema.destinationVersions.createdAt,
+      })
+      .from(databaseSchema.destinationVersions)
+      .where(eq(databaseSchema.destinationVersions.linkId, linkId))
+      .orderBy(desc(databaseSchema.destinationVersions.versionNumber))
+      .limit(1),
   ] as const;
 }
 
 export function hydrateBatchLink(
-  results: D1Result[],
+  results: readonly unknown[],
   linkResultIndex: number,
   versionsResultIndex: number,
 ): Link {
@@ -147,8 +146,8 @@ function hydrateLink(row: LinkRow, versionRows: readonly DestinationVersionRow[]
     state: row.state,
     revision: row.revision,
     destinationVersions: versionRows.map(hydrateDestinationVersion),
-    createdAt: new Date(row.createdAt),
-    updatedAt: new Date(row.updatedAt),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -157,7 +156,7 @@ export function hydrateDestinationVersion(row: DestinationVersionRow): Destinati
     id: row.id,
     versionNumber: row.versionNumber,
     destination: row.destination,
-    createdAt: new Date(row.createdAt),
+    createdAt: row.createdAt,
   };
 }
 
@@ -172,45 +171,37 @@ export function hydrateSummary(row: LinkSummarySqlRow): LinkSummary {
       id: row.destinationVersionId,
       versionNumber: row.versionNumber,
       destination: row.destination,
-      createdAt: new Date(row.destinationCreatedAt),
+      createdAt: row.destinationCreatedAt,
     },
-    createdAt: new Date(row.createdAt),
-    updatedAt: new Date(row.updatedAt),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
-export async function findAlias(database: D1Database, alias: Alias) {
-  return database
-    .prepare(
-      `SELECT link_id AS linkId
-       FROM aliases
-       WHERE alias = ?`,
-    )
-    .bind(alias)
-    .first<{ linkId: string | null }>();
+export async function findAlias(database: ShortflareDatabase, alias: Alias) {
+  const aliasRows = await database
+    .select({ linkId: databaseSchema.aliases.linkId })
+    .from(databaseSchema.aliases)
+    .where(eq(databaseSchema.aliases.alias, alias))
+    .limit(1);
+  return aliasRows[0] ?? null;
 }
 
 export function insertAuditEvent(
-  database: D1Database,
+  database: ShortflareDatabase,
   id: string,
   context: LinkMutationContext,
   subjectId: string,
-  metadata: Record<string, unknown>,
+  metadata: AuditMetadata,
 ) {
-  return database
-    .prepare(
-      `INSERT INTO audit_events
-         (id, actor_id, action, subject_id, occurred_at, metadata)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      id,
-      context.actor.id,
-      context.action,
-      subjectId,
-      context.occurredAt.getTime(),
-      JSON.stringify(metadata),
-    );
+  return database.insert(databaseSchema.auditEvents).values({
+    id,
+    actorId: context.actor.id,
+    action: context.action,
+    subjectId,
+    occurredAt: context.occurredAt,
+    metadata,
+  });
 }
 
 export function changes(result: D1Result | undefined): number {
@@ -226,7 +217,7 @@ export function updated(link: Link): PersistedLinkMutation {
 }
 
 export async function retryStoredLinkMutation<Result>(
-  database: D1Database,
+  database: ShortflareDatabase,
   linkId: string,
   operation: string,
   mutate: (stored: StoredLink) => Promise<Result | typeof retryMutation>,
@@ -239,7 +230,7 @@ export async function retryStoredLinkMutation<Result>(
 
   // A retry must observe the committed result of the previous attempt. Recursion
   // makes that sequencing explicit without suppressing no-await-in-loop.
-  const stored = await readStoredLink(database, "l.id = ?", linkId);
+  const stored = await readStoredLink(database, { kind: "id", value: linkId });
   if (stored === null) return notFound();
 
   const result = await mutate(stored);
@@ -254,8 +245,8 @@ export function assertAlias(value: string): Alias {
   return alias;
 }
 
-function rows<Row>(result: D1Result | undefined): Row[] {
-  return (result?.results ?? []) as Row[];
+function rows<Row>(result: unknown): Row[] {
+  return Array.isArray(result) ? (result as Row[]) : [];
 }
 
 function fail(message: string): never {

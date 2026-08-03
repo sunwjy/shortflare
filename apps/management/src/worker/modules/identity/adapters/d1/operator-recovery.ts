@@ -1,96 +1,117 @@
+import { databaseSchema, type ShortflareDatabase } from "@shortflare/database/d1";
+import { and, eq, exists, gt, sql } from "drizzle-orm";
+
 import type { OperatorRecoveryPersistence } from "../../application/operator-recovery";
-import type { User } from "../../application/shared";
+import { changed, first, toDate, userSelection } from "./shared";
 
 export function createD1OperatorRecoveryPersistence(
-  database: D1Database,
+  database: ShortflareDatabase,
 ): OperatorRecoveryPersistence {
   return {
-    findActiveAdministrator(normalizedEmail) {
-      return database
-        .prepare(
-          `SELECT id, display_email AS email, role, state
-           FROM users
-           WHERE normalized_email = ? AND state = 'active' AND role = 'administrator'`,
-        )
-        .bind(normalizedEmail)
-        .first<User>();
+    async findActiveAdministrator(normalizedEmail) {
+      return first(
+        await database
+          .select(userSelection)
+          .from(databaseSchema.users)
+          .where(
+            and(
+              eq(databaseSchema.users.normalizedEmail, normalizedEmail),
+              eq(databaseSchema.users.state, "active"),
+              eq(databaseSchema.users.role, "administrator"),
+            ),
+          )
+          .limit(1),
+      );
     },
     async write(input) {
       await database.batch([
-        database.prepare("DELETE FROM operator_recovery WHERE singleton_key = 1"),
         database
-          .prepare(
-            `INSERT INTO operator_recovery
-               (singleton_key, user_id, token_hash, created_at, expires_at)
-             VALUES (1, ?, ?, ?, ?)`,
-          )
-          .bind(input.userId, input.tokenHash, input.createdAt, input.expiresAt),
+          .delete(databaseSchema.operatorRecovery)
+          .where(eq(databaseSchema.operatorRecovery.singletonKey, 1)),
+        database.insert(databaseSchema.operatorRecovery).values({
+          singletonKey: 1,
+          userId: input.userId,
+          tokenHash: input.tokenHash,
+          createdAt: toDate(input.createdAt),
+          expiresAt: toDate(input.expiresAt),
+        }),
       ]);
     },
-    findActiveAdministratorByToken(tokenHash, occurredAt) {
-      return database
-        .prepare(
-          `SELECT users.id, users.display_email AS email, users.role, users.state
-           FROM operator_recovery
-           INNER JOIN users ON users.id = operator_recovery.user_id
-           WHERE operator_recovery.singleton_key = 1
-             AND operator_recovery.token_hash = ?
-             AND operator_recovery.expires_at > ?
-             AND users.state = 'active'
-             AND users.role = 'administrator'`,
-        )
-        .bind(tokenHash, occurredAt)
-        .first<User>();
+    async findActiveAdministratorByToken(tokenHash, occurredAt) {
+      return first(
+        await database
+          .select(userSelection)
+          .from(databaseSchema.operatorRecovery)
+          .innerJoin(
+            databaseSchema.users,
+            eq(databaseSchema.users.id, databaseSchema.operatorRecovery.userId),
+          )
+          .where(
+            and(
+              eq(databaseSchema.operatorRecovery.singletonKey, 1),
+              eq(databaseSchema.operatorRecovery.tokenHash, tokenHash),
+              gt(databaseSchema.operatorRecovery.expiresAt, toDate(occurredAt)),
+              eq(databaseSchema.users.state, "active"),
+              eq(databaseSchema.users.role, "administrator"),
+            ),
+          )
+          .limit(1),
+      );
     },
     async use(input) {
       // ADR-0008 makes recovery a one-time atomic handoff. Repeating the token
       // condition prevents any side effect if the handoff expires or is consumed.
-      const condition = `EXISTS (
-        SELECT 1 FROM operator_recovery
-        WHERE singleton_key = 1 AND user_id = ? AND token_hash = ? AND expires_at > ?
-      )`;
+      const liveRecovery = database
+        .select({ value: sql`1` })
+        .from(databaseSchema.operatorRecovery)
+        .where(
+          and(
+            eq(databaseSchema.operatorRecovery.singletonKey, 1),
+            eq(databaseSchema.operatorRecovery.userId, input.userId),
+            eq(databaseSchema.operatorRecovery.tokenHash, input.tokenHash),
+            gt(databaseSchema.operatorRecovery.expiresAt, toDate(input.occurredAt)),
+          ),
+        );
       const results = await database.batch([
+        database.insert(databaseSchema.auditEvents).select(
+          database
+            .select({
+              id: sql<string>`${input.auditId}`.as("id"),
+              actorId: sql<string>`${"system"}`.as("actor_id"),
+              action: sql<"operator-recovery">`${"operator-recovery"}`.as("action"),
+              subjectId: databaseSchema.users.id,
+              occurredAt: sql<Date>`${input.occurredAt}`.as("occurred_at"),
+              metadata: sql<Record<string, never>>`${JSON.stringify({})}`.as("metadata"),
+            })
+            .from(databaseSchema.users)
+            .where(
+              and(
+                eq(databaseSchema.users.id, input.userId),
+                eq(databaseSchema.users.state, "active"),
+                eq(databaseSchema.users.role, "administrator"),
+                exists(liveRecovery),
+              ),
+            ),
+        ),
         database
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, 'system', 'operator-recovery', id, ?, '{}'
-             FROM users
-             WHERE id = ? AND state = 'active' AND role = 'administrator' AND ${condition}`,
-          )
-          .bind(
-            input.auditId,
-            input.occurredAt,
-            input.userId,
-            input.userId,
-            input.tokenHash,
-            input.occurredAt,
+          .update(databaseSchema.credentials)
+          .set({ verifier: input.verifier, updatedAt: toDate(input.occurredAt) })
+          .where(and(eq(databaseSchema.credentials.userId, input.userId), exists(liveRecovery))),
+        database
+          .delete(databaseSchema.sessions)
+          .where(and(eq(databaseSchema.sessions.userId, input.userId), exists(liveRecovery))),
+        database
+          .delete(databaseSchema.operatorRecovery)
+          .where(
+            and(
+              eq(databaseSchema.operatorRecovery.singletonKey, 1),
+              eq(databaseSchema.operatorRecovery.userId, input.userId),
+              eq(databaseSchema.operatorRecovery.tokenHash, input.tokenHash),
+              gt(databaseSchema.operatorRecovery.expiresAt, toDate(input.occurredAt)),
+            ),
           ),
-        database
-          .prepare(
-            `UPDATE credentials SET verifier = ?, updated_at = ?
-             WHERE user_id = ? AND ${condition}`,
-          )
-          .bind(
-            input.verifier,
-            input.occurredAt,
-            input.userId,
-            input.userId,
-            input.tokenHash,
-            input.occurredAt,
-          ),
-        database
-          .prepare(`DELETE FROM sessions WHERE user_id = ? AND ${condition}`)
-          .bind(input.userId, input.userId, input.tokenHash, input.occurredAt),
-        database
-          .prepare(
-            `DELETE FROM operator_recovery
-             WHERE singleton_key = 1 AND user_id = ?
-               AND token_hash = ? AND expires_at > ?`,
-          )
-          .bind(input.userId, input.tokenHash, input.occurredAt),
       ]);
-      return (results[3]?.meta.changes ?? 0) > 0;
+      return changed(results, 3);
     },
   };
 }

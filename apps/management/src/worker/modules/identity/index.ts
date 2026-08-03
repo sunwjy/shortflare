@@ -1,9 +1,4 @@
-import { createD1InitialSetupPersistence } from "./adapters/d1/initial-setup";
-import { createD1InvitationPersistence } from "./adapters/d1/invitations";
-import { createD1OperatorRecoveryPersistence } from "./adapters/d1/operator-recovery";
-import { createD1PasswordResetPersistence } from "./adapters/d1/password-resets";
-import { createD1SessionPersistence } from "./adapters/d1/sessions";
-import { createD1UserPersistence } from "./adapters/d1/users";
+import { createD1IdentityPersistence } from "./adapters/d1";
 import { createInitialSetup } from "./application/initial-setup";
 import { createInvitations } from "./application/invitations";
 import { createOperatorRecovery } from "./application/operator-recovery";
@@ -32,31 +27,32 @@ type IdentityOptions = Readonly<{
  * and for delivering that secret without logging it.
  */
 export function createIdentity(options: IdentityOptions) {
+  const persistence = createD1IdentityPersistence(options.db);
   const now = options.now ?? (() => new Date());
   const randomId = options.randomId ?? (() => crypto.randomUUID());
   const randomToken = options.randomToken ?? createRandomToken;
-  const initialSetup = createInitialSetup(createD1InitialSetupPersistence(options.db), {
+  const initialSetup = createInitialSetup(persistence.initialSetup, {
     now,
     randomId,
   });
-  const sessions = createSessions(createD1SessionPersistence(options.db), {
+  const sessions = createSessions(persistence.sessions, {
     now,
     randomId,
     randomToken,
   });
   const invitations = createInvitations({
-    persistence: createD1InvitationPersistence(options.db),
+    persistence: persistence.invitations,
     now,
     randomId,
     randomToken,
   });
-  const users = createUsers(createD1UserPersistence(options.db), { now, randomId });
-  const passwordResets = createPasswordResets(createD1PasswordResetPersistence(options.db), {
+  const users = createUsers(persistence.users, { now, randomId });
+  const passwordResets = createPasswordResets(persistence.passwordResets, {
     now,
     randomId,
     randomToken,
   });
-  const operatorRecovery = createOperatorRecovery(createD1OperatorRecoveryPersistence(options.db), {
+  const operatorRecovery = createOperatorRecovery(persistence.operatorRecovery, {
     now,
     randomId,
   });

@@ -2,13 +2,13 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 import { app as managementApp } from "../../management/src/worker/index";
-import { createIdentity } from "../../management/src/worker/identity";
+import { createIdentity } from "../../management/src/worker/modules/identity";
 import redirectApp from "../src/index";
 import { createTestExecutionContext } from "./execution-context";
 
 describe("first end-to-end vertical slice", () => {
   it("creates a Link through Management and resolves it through Redirect", async () => {
-    await createIdentity({ db: env.DB }).writeInitialSetup({
+    await createIdentity({ db: env.DB }).initialSetup.writeInitialSetup({
       displayEmail: "Admin@Example.com",
       token: "setup-secret",
       expiresAt: new Date(Date.now() + 30 * 60 * 1_000),

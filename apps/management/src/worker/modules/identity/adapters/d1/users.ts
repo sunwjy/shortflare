@@ -1,168 +1,165 @@
-import type { User } from "../../application/shared";
+import { databaseSchema, type ShortflareDatabase } from "@shortflare/database/d1";
+import { and, asc, eq, exists, sql } from "drizzle-orm";
+
 import type { UserPersistence } from "../../application/users";
+import { changed, first, toDate, userSelection } from "./shared";
 
 /**
  * Persists User lifecycle changes with their Audit Event and Session revocation.
  * Write-time guards enforce recent authentication and preserve at least one
  * Active Administrator without trusting an earlier application read.
  */
-export function createD1UserPersistence(database: D1Database): UserPersistence {
+export function createD1UserPersistence(database: ShortflareDatabase): UserPersistence {
   return {
-    async list() {
-      const result = await database
-        .prepare(
-          `SELECT id, display_email AS email, role, state
-           FROM users
-           ORDER BY created_at, id`,
-        )
-        .all<User>();
-      return result.results;
+    list() {
+      return database
+        .select(userSelection)
+        .from(databaseSchema.users)
+        .orderBy(asc(databaseSchema.users.createdAt), asc(databaseSchema.users.id));
     },
 
-    find(userId) {
-      return database
-        .prepare(
-          `SELECT id, display_email AS email, role, state
-           FROM users WHERE id = ?`,
-        )
-        .bind(userId)
-        .first<User>();
+    async find(userId) {
+      return first(
+        await database
+          .select(userSelection)
+          .from(databaseSchema.users)
+          .where(eq(databaseSchema.users.id, userId))
+          .limit(1),
+      );
     },
 
     async changeRole(input) {
-      const guard = roleChangeGuard;
-      const metadata = JSON.stringify({ fromRole: input.storedRole, toRole: input.role });
+      const guard = sql`
+        ${databaseSchema.users.id} = ${input.userId}
+        AND ${databaseSchema.users.role} = ${input.storedRole}
+        AND ${databaseSchema.users.state} IN ('active', 'suspended')
+        AND (
+          ${input.recentlyAuthenticated ? 1 : 0} = 1
+          OR (${input.role} != 'administrator' AND ${databaseSchema.users.role} != 'administrator')
+        )
+        AND NOT (
+          ${databaseSchema.users.state} = 'active'
+          AND ${databaseSchema.users.role} = 'administrator'
+          AND ${input.role} != 'administrator'
+          AND (
+            SELECT COUNT(*) FROM ${databaseSchema.users}
+            WHERE ${databaseSchema.users.state} = 'active'
+              AND ${databaseSchema.users.role} = 'administrator'
+          ) = 1
+        )
+      `;
+      const metadata = { fromRole: input.storedRole, toRole: input.role };
       // Audit insertion and mutation deliberately share the same guard. The D1
       // batch then makes the audit, state change, and Session revocation atomic.
+      const changedUser = database
+        .select({ value: sql`1` })
+        .from(databaseSchema.users)
+        .where(
+          and(eq(databaseSchema.users.id, input.userId), eq(databaseSchema.users.role, input.role)),
+        );
       const results = await database.batch([
+        database.insert(databaseSchema.auditEvents).select(
+          database
+            .select({
+              id: sql<string>`${input.auditId}`.as("id"),
+              actorId: sql<string>`${input.actorId}`.as("actor_id"),
+              action: sql<"role-change">`${"role-change"}`.as("action"),
+              subjectId: databaseSchema.users.id,
+              occurredAt: sql<Date>`${input.occurredAt}`.as("occurred_at"),
+              metadata: sql<typeof metadata>`${JSON.stringify(metadata)}`.as("metadata"),
+            })
+            .from(databaseSchema.users)
+            .where(guard),
+        ),
         database
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, ?, 'role-change', id, ?, ?
-             FROM users WHERE ${guard}`,
-          )
-          .bind(
-            input.auditId,
-            input.actorId,
-            input.occurredAt,
-            metadata,
-            input.userId,
-            input.storedRole,
-            input.recentlyAuthenticated ? 1 : 0,
-            input.role,
-            input.role,
-          ),
+          .update(databaseSchema.users)
+          .set({ role: input.role, updatedAt: toDate(input.occurredAt) })
+          .where(guard),
         database
-          .prepare(`UPDATE users SET role = ?, updated_at = ? WHERE ${guard}`)
-          .bind(
-            input.role,
-            input.occurredAt,
-            input.userId,
-            input.storedRole,
-            input.recentlyAuthenticated ? 1 : 0,
-            input.role,
-            input.role,
-          ),
-        database
-          .prepare(
-            `DELETE FROM sessions
-             WHERE user_id = ?
-               AND EXISTS (SELECT 1 FROM users WHERE id = ? AND role = ?)`,
-          )
-          .bind(input.userId, input.userId, input.role),
+          .delete(databaseSchema.sessions)
+          .where(and(eq(databaseSchema.sessions.userId, input.userId), exists(changedUser))),
       ]);
-      return changed(results);
+      return changed(results, 1);
     },
 
     async suspend(input) {
-      const metadata = JSON.stringify({
-        fromUserState: "active",
-        toUserState: "suspended",
-      });
+      const guard = sql`
+        ${databaseSchema.users.id} = ${input.userId}
+        AND ${databaseSchema.users.state} = 'active'
+        AND (${input.recentlyAuthenticated ? 1 : 0} = 1
+          OR ${databaseSchema.users.role} != 'administrator')
+        AND NOT (
+          ${databaseSchema.users.role} = 'administrator'
+          AND (
+            SELECT COUNT(*) FROM ${databaseSchema.users}
+            WHERE ${databaseSchema.users.state} = 'active'
+              AND ${databaseSchema.users.role} = 'administrator'
+          ) = 1
+        )
+      `;
+      const metadata = { fromUserState: "active" as const, toUserState: "suspended" as const };
       // Keep the protection predicate identical for the Audit Event and update;
       // otherwise a concurrent role change could make their outcomes disagree.
-      const results = await database.batch([
-        database
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, ?, 'user-suspend', id, ?, ?
-             FROM users WHERE ${suspendGuard}`,
-          )
-          .bind(
-            input.auditId,
-            input.actorId,
-            input.occurredAt,
-            metadata,
-            input.userId,
-            input.recentlyAuthenticated ? 1 : 0,
+      const suspendedUser = database
+        .select({ value: sql`1` })
+        .from(databaseSchema.users)
+        .where(
+          and(
+            eq(databaseSchema.users.id, input.userId),
+            eq(databaseSchema.users.state, "suspended"),
           ),
+        );
+      const results = await database.batch([
+        database.insert(databaseSchema.auditEvents).select(
+          database
+            .select({
+              id: sql<string>`${input.auditId}`.as("id"),
+              actorId: sql<string>`${input.actorId}`.as("actor_id"),
+              action: sql<"user-suspend">`${"user-suspend"}`.as("action"),
+              subjectId: databaseSchema.users.id,
+              occurredAt: sql<Date>`${input.occurredAt}`.as("occurred_at"),
+              metadata: sql<typeof metadata>`${JSON.stringify(metadata)}`.as("metadata"),
+            })
+            .from(databaseSchema.users)
+            .where(guard),
+        ),
         database
-          .prepare(`UPDATE users SET state = 'suspended', updated_at = ? WHERE ${suspendGuard}`)
-          .bind(input.occurredAt, input.userId, input.recentlyAuthenticated ? 1 : 0),
+          .update(databaseSchema.users)
+          .set({ state: "suspended", updatedAt: toDate(input.occurredAt) })
+          .where(guard),
         database
-          .prepare(
-            `DELETE FROM sessions
-             WHERE user_id = ?
-               AND EXISTS (SELECT 1 FROM users WHERE id = ? AND state = 'suspended')`,
-          )
-          .bind(input.userId, input.userId),
+          .delete(databaseSchema.sessions)
+          .where(and(eq(databaseSchema.sessions.userId, input.userId), exists(suspendedUser))),
       ]);
-      return changed(results);
+      return changed(results, 1);
     },
 
     async reactivate(input) {
-      const metadata = JSON.stringify({
-        fromUserState: "suspended",
-        toUserState: "active",
-      });
+      const guard = and(
+        eq(databaseSchema.users.id, input.userId),
+        eq(databaseSchema.users.state, "suspended"),
+      );
+      const metadata = { fromUserState: "suspended" as const, toUserState: "active" as const };
       const results = await database.batch([
+        database.insert(databaseSchema.auditEvents).select(
+          database
+            .select({
+              id: sql<string>`${input.auditId}`.as("id"),
+              actorId: sql<string>`${input.actorId}`.as("actor_id"),
+              action: sql<"user-reactivate">`${"user-reactivate"}`.as("action"),
+              subjectId: databaseSchema.users.id,
+              occurredAt: sql<Date>`${input.occurredAt}`.as("occurred_at"),
+              metadata: sql<typeof metadata>`${JSON.stringify(metadata)}`.as("metadata"),
+            })
+            .from(databaseSchema.users)
+            .where(guard),
+        ),
         database
-          .prepare(
-            `INSERT INTO audit_events
-               (id, actor_id, action, subject_id, occurred_at, metadata)
-             SELECT ?, ?, 'user-reactivate', id, ?, ?
-             FROM users WHERE id = ? AND state = 'suspended'`,
-          )
-          .bind(input.auditId, input.actorId, input.occurredAt, metadata, input.userId),
-        database
-          .prepare(
-            `UPDATE users SET state = 'active', updated_at = ?
-             WHERE id = ? AND state = 'suspended'`,
-          )
-          .bind(input.occurredAt, input.userId),
+          .update(databaseSchema.users)
+          .set({ state: "active", updatedAt: toDate(input.occurredAt) })
+          .where(guard),
       ]);
-      return changed(results);
+      return changed(results, 1);
     },
   };
-}
-
-const roleChangeGuard = `id = ? AND role = ? AND state IN ('active', 'suspended')
-  AND (
-    ? = 1
-    OR (? != 'administrator' AND role != 'administrator')
-  )
-  AND NOT (
-    state = 'active'
-    AND role = 'administrator'
-    AND ? != 'administrator'
-    AND (
-      SELECT COUNT(*) FROM users
-      WHERE state = 'active' AND role = 'administrator'
-    ) = 1
-  )`;
-
-const suspendGuard = `id = ? AND state = 'active'
-  AND (? = 1 OR role != 'administrator')
-  AND NOT (
-    role = 'administrator'
-    AND (
-      SELECT COUNT(*) FROM users
-      WHERE state = 'active' AND role = 'administrator'
-    ) = 1
-  )`;
-
-function changed(results: D1Result[]) {
-  return (results[1]?.meta.changes ?? 0) > 0;
 }
