@@ -24,6 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@shortflare/analytics": "workspace:*",
     "@shortflare/links": "workspace:*",
     "drizzle-orm": "catalog:"
   },

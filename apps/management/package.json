@@ -17,6 +17,7 @@
     "@base-ui/react": "^1.6.0",
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",
+    "@shortflare/analytics": "workspace:*",
     "@shortflare/database": "workspace:*",
     "@shortflare/links": "workspace:*",
     "@tanstack/react-form": "^1.33.2",

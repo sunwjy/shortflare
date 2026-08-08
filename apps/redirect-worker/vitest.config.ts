@@ -16,11 +16,13 @@ export default defineConfig(async () => {
       cloudflareTest({
         miniflare: {
           bindings: {
+            ANALYTICS_HMAC_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             REDIRECT_DOMAIN: "short.test",
             TEST_MIGRATIONS: migrations,
           },
           compatibilityDate: "2026-07-19",
           d1Databases: { DB: "shortflare-redirect-test" },
+          queueProducers: { ANALYTICS_QUEUE: "shortflare-events-test" },
         },
       }),
     ],

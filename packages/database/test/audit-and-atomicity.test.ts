@@ -1,8 +1,9 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { createAnalytics, type ClickEvent } from "@shortflare/analytics";
 import { createLinks } from "@shortflare/links";
-import { createD1LinksPersistence } from "../src/index";
+import { createD1AnalyticsPersistence, createD1LinksPersistence } from "../src/index";
 import { resetDatabase } from "./reset-database";
 
 const actor = { id: "user-1" };
@@ -236,6 +237,62 @@ describe("D1 Link mutation persistence", () => {
       kind: "detail",
       link: { title: "Original title" },
     });
+  });
+
+  it("removes all Link analytics in the same permanent-delete transaction", async () => {
+    const links = createTestLinks();
+    const created = await links.execute(
+      {
+        kind: "create",
+        alias: "Docs",
+        destination: "https://example.com",
+        title: "Documentation",
+      },
+      actor,
+    );
+    if (!created.ok || created.kind !== "link") {
+      throw new Error("expected Link creation to succeed");
+    }
+    const destinationVersion = created.link.destinationVersions[0];
+    if (destinationVersion === undefined) {
+      throw new Error("expected an initial Destination Version");
+    }
+    const click: ClickEvent = {
+      schemaVersion: 1,
+      classificationVersion: 1,
+      eventId: "click-1",
+      linkId: created.link.id,
+      destinationVersionId: destinationVersion.id,
+      occurredAt: "2026-07-23T00:00:00.000Z",
+      pseudonymousVisitor: "A".repeat(43),
+      botClassification: "human",
+      referrerDomain: "direct",
+      country: "KR",
+      deviceCategory: "desktop",
+    };
+    await createAnalytics({ persistence: createD1AnalyticsPersistence(env.DB) }).ingest([click]);
+    await links.execute({ kind: "archive", linkId: created.link.id, expectedRevision: 0 }, actor);
+
+    await expect(
+      links.execute(
+        {
+          kind: "permanently-delete",
+          linkId: created.link.id,
+          expectedRevision: 1,
+          confirmationAlias: "Docs",
+        },
+        actor,
+      ),
+    ).resolves.toMatchObject({ ok: true, kind: "deleted" });
+
+    // Foreign-key cascades are the atomic cleanup seam for all three analytics stores.
+    const counts = await env.DB.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM analytics_events) AS events,
+         (SELECT COUNT(*) FROM analytics_uniques) AS uniques,
+         (SELECT COUNT(*) FROM analytics_rollups) AS rollups`,
+    ).first<{ events: number; uniques: number; rollups: number }>();
+    expect(counts).toEqual({ events: 0, uniques: 0, rollups: 0 });
   });
 });
 
