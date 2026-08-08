@@ -74,8 +74,10 @@ resource.
    and `410 Gone` for an Archived Link.
 6. Merge incoming query parameters into the destination. Values stored on the
    Destination Version win on name collisions.
-7. Return the redirect without waiting for analytics. Schedule Queue emission
-   after the response and observe emission failures.
+7. For a successful `GET` redirect, schedule Click Event creation and Queue
+   emission after the response. `HEAD` redirects and non-redirect responses do
+   not create Click Events. Analytics failures are observed but never change
+   the redirect response.
 
 The root path returns a tiny `200 OK` installation page with
 `noindex, nofollow`; it does not disclose the Management Worker address.
@@ -269,24 +271,50 @@ but requires a detail refetch for current data.
 
 ### Analytics ingestion and query
 
-1. Redirect derives a 30-minute rotating HMAC from transient request attributes
-   for approximate uniqueness. Raw IP addresses and User-Agent strings are not
-   stored.
-2. The event contains Link and Destination Version IDs, UTC time, referrer
-   domain, country, coarse device category, bot classification, and the
-   short-lived pseudonymous value.
-3. Queue provides buffering and at-least-once delivery. Every event has an ID;
-   the consumer is idempotent.
-4. The consumer groups a batch by time bucket and dimensions, inserts raw
-   events, and updates rollups through D1 batch operations.
-5. Raw events expire after 90 days. Daily rollups remain until explicitly
-   deleted.
-6. UI date ranges are stored and queried in UTC, then rendered in the browser's
-   time zone.
+1. The Click Analytics module derives a Link-scoped Pseudonymous Visitor with
+   HMAC-SHA-256 from a long-lived 256-bit Instance secret, the Link ID, a fixed
+   UTC half-hour bucket, and transient client IP and User-Agent values. The raw
+   inputs are never stored or logged.
+2. Every versioned Click Event has an immutable Event ID, Link and Destination
+   Version IDs, Click Time, Pseudonymous Visitor, Referrer Domain, Country,
+   Device Category, bot classification, and classification version. It excludes
+   Alias, title, Destination, query parameters, cookies, the full referrer URL,
+   raw IP, and raw User-Agent.
+3. Bot and Device classification use deterministic local rules rather than paid
+   Bot Management. Missing metadata and known crawlers, link previews,
+   command-line clients, and headless automation are suspected bots. Rule
+   changes increment the classification version and do not rewrite history.
+4. Queue provides at-least-once delivery. Redelivery of the same Event ID and
+   payload is an acknowledged no-op; the same ID with different content is an
+   integrity conflict retried in isolation before dead-lettering. Invalid or
+   unsupported messages are also isolated so valid batch members still commit.
+5. A new raw event, its uniqueness records, and its hourly and daily rollup
+   changes commit atomically. The consumer updates Link-wide and Destination
+   Version scopes and independent Referrer Domain, Country, Device Category,
+   and bot-classification breakdowns; the MVP does not combine dimensions.
+6. Human and Unique Human Clicks are retained for totals, time series,
+   Referrer, Country, and Device breakdowns. Bot breakdowns retain Human and
+   Suspected Bot Clicks; suspected bots have no unique metric.
+7. Raw events and Hourly Rollups expire 90 days after Click Time. Daily Rollups
+   remain until Analytics Erasure or permanent Link deletion. Retention cleanup
+   is exposed by the module in this slice; its scheduled trigger belongs to the
+   operations baseline.
+8. Analytics Erasure removes all analytics for one Link or the Instance.
+   Analytics Recalculation atomically replaces one Link's rollups and uniqueness
+   records for one complete UTC date, and rejects dates whose raw events are no
+   longer complete.
+9. Queries use aligned, half-open UTC ranges and explicit hourly or daily
+   granularity. Results support Instance, Link, and Destination Version scopes,
+   return zero-filled time buckets, and return only identifiers and analytics
+   values. Display data is composed through Links by the Management adapter.
+10. UI date ranges are stored and queried in UTC, then rendered in the browser's
+    time zone.
 
 The default dashboard excludes suspected bots and reports Human Clicks and
 30-minute Unique Human Clicks separately. Bot classification and uniqueness are
-approximate and must be described as such in the UI.
+approximate and must be described as such in the UI. Hourly and daily Unique
+Human Clicks sum half-hour counts; Instance totals sum Link-level counts rather
+than correlating a person across Links.
 
 ## Modules, interfaces, and seams
 
@@ -320,9 +348,10 @@ The persistence seam is owned by this module. D1 and in-memory adapters satisfy
 it. Expected command and query failures use discriminated result types; callers
 do not receive Drizzle models or issue database queries.
 
-### Analytics module
+### Analytics modules
 
-`packages/analytics` owns:
+`packages/analytics` owns two deep modules because the Redirect and Management
+Workers have different runtime responsibilities:
 
 - the click event and bot classification vocabulary;
 - HMAC-based uniqueness semantics;
@@ -330,18 +359,34 @@ do not receive Drizzle models or issue database queries.
 - rollup dimensions and metric definitions; and
 - analytics query results consumed by the UI and future REST endpoints.
 
-Its main interface is intentionally small:
+The Redirect-facing Click Analytics module has one transport-neutral operation.
+It owns event IDs, time, normalization, classification, pseudonym derivation,
+wire versions, and delivery behind the interface:
 
 ```ts
-type Analytics = {
-  record(event: ClickEvent): Promise<void>;
-  query(query: AnalyticsQuery, actor: Actor): Promise<AnalyticsResult>;
+type ClickAnalytics = {
+  record(input: ClickObservation): Promise<ClickRecordResult>;
 };
 ```
 
-The MVP uses Queue/D1 adapters. A future Analytics Engine adapter is a real
-alternative at the same seam, not a new domain model. Both modes share the D1
-rollup schema and result types.
+The Management-facing Analytics module owns ingestion, querying, and
+maintenance. Expected event outcomes are returned per message; storage failures
+reject the operation so the Queue adapter retries every unacknowledged message.
+
+```ts
+type Analytics = {
+  ingest(events: readonly unknown[]): Promise<readonly IngestionResult[]>;
+  query(query: AnalyticsQuery): Promise<AnalyticsResult>;
+  execute(command: AnalyticsCommand): Promise<AnalyticsCommandResult>;
+};
+```
+
+Erasure and recalculation command variants carry an Actor and atomically create
+one Audit Event on success; automated retention does not. Authentication and
+authorization stay in Management adapters before module calls. The MVP uses
+Queue/D1 adapters and in-memory adapters for interface tests. A future Analytics
+Engine delivery adapter is a real alternative at the Click Analytics seam, not
+a new domain model, and continues to produce the shared result types.
 
 ### Database module
 
@@ -454,7 +499,7 @@ belong in the Drizzle schema, not this document.
 | Instance | instance metadata and deployed version | exactly one row per Cloudflare account |
 | Identity | initial setup and operator recovery handoffs, users, credentials, invitations, reset tokens, sessions | normalized email is unique; after setup, at least one active Administrator remains |
 | Links | links, destination versions, reserved aliases, tags | Alias is case-sensitive and unique; destination history is append-only |
-| Analytics | raw click events, deduplication keys, hourly/daily rollups, consumer checkpoints | event ID is idempotent; raw retention is 90 days |
+| Analytics | raw Click Events, uniqueness records, hourly/daily rollups, consumer checkpoints | Event ID is idempotent; raw and hourly retention is 90 days; daily rollups persist until erasure |
 | Audit | administrative mutation events | actor, action, subject ID, time, and non-sensitive metadata are retained |
 | Deployment | schema and application version metadata | both Workers must be compatible with the recorded schema version |
 
@@ -785,6 +830,10 @@ and idempotent.
   no secrets, IP addresses, raw User-Agent values, or credentials.
 - Observe Queue backlog, retry count, dead-letter count, D1 overloads, consumer
   watermark, and analytics ingestion loss.
+- Consume analytics in batches of at most 10 with a one-second timeout and one
+  concurrent consumer. Retry failed messages three times with a 60-second delay
+  before moving them to the dead-letter queue; replay and DLQ operations belong
+  to the operations baseline.
 - Rate limits protect authentication and management mutations. Redirect abuse
   controls must prefer completing the redirect while optionally excluding the
   event from analytics.
@@ -828,3 +877,4 @@ require a new top-level package by default.
 - [ADR-0011: Own the Management UI through shadcn, Tailwind, and TanStack Form](./adr/0011-own-ui-components-through-shadcn-and-base-ui.md)
 - [ADR-0012: Organize the Management backend by capability](./adr/0012-organize-management-backend-by-capability.md)
 - [ADR-0013: Standardize runtime D1 access through Drizzle](./adr/0013-standardize-runtime-d1-access-through-drizzle.md)
+- [ADR-0014: Approximate unique clicks with Link-scoped UTC buckets](./adr/0014-approximate-unique-clicks-with-link-scoped-utc-buckets.md)
