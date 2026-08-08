@@ -1,4 +1,5 @@
 export { auditEvents, type AuditMetadata } from "./audit";
+export { analyticsEvents, analyticsRollups, analyticsUniques } from "./analytics";
 export {
   credentials,
   initialSetup,

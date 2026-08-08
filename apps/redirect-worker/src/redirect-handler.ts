@@ -1,9 +1,12 @@
+import type { ClickAnalytics } from "@shortflare/analytics";
 import { createD1LinksPersistence } from "@shortflare/database";
 import { createLinks, mergeDestinationQuery, type RedirectDecision } from "@shortflare/links";
 import type { Context } from "hono";
 
 export type RedirectWorkerEnvironment = {
   Bindings: {
+    ANALYTICS_HMAC_KEY: string;
+    ANALYTICS_QUEUE: Queue;
     DB: D1Database;
   };
 };
@@ -15,7 +18,11 @@ type CachedDecision = RedirectDecision | undefined;
  * Cache failures never block D1 resolution, D1 failures return 503, and cache
  * writes run after the response through the Worker's execution context.
  */
-export async function handleRedirect(context: Context<RedirectWorkerEnvironment>, alias: string) {
+export async function handleRedirect(
+  context: Context<RedirectWorkerEnvironment>,
+  alias: string,
+  createClickAnalytics: (bindings: RedirectWorkerEnvironment["Bindings"]) => ClickAnalytics,
+) {
   const url = new URL(context.req.url);
   const cacheKey = createResolutionCacheKey(url, alias);
   let decision: CachedDecision;
@@ -53,7 +60,38 @@ export async function handleRedirect(context: Context<RedirectWorkerEnvironment>
     });
   }
   context.header("cache-control", "no-store");
+  if (context.req.method === "GET") {
+    scheduleClickAnalytics(context, decision, createClickAnalytics);
+  }
   return context.redirect(mergeDestinationQuery(decision.destination, url.search.slice(1)), 302);
+}
+
+function scheduleClickAnalytics(
+  context: Context<RedirectWorkerEnvironment>,
+  decision: Extract<RedirectDecision, { kind: "redirect" }>,
+  factory: (bindings: RedirectWorkerEnvironment["Bindings"]) => ClickAnalytics,
+) {
+  try {
+    const analytics = factory(context.env);
+    const country = context.req.raw.cf?.country;
+    context.executionCtx.waitUntil(
+      analytics
+        .record({
+          linkId: decision.linkId,
+          destinationVersionId: decision.destinationVersionId,
+          clientIp: context.req.header("cf-connecting-ip") ?? null,
+          userAgent: context.req.header("user-agent") ?? null,
+          referrer: context.req.header("referer") ?? null,
+          country: typeof country === "string" ? country : null,
+        })
+        .catch((error: unknown) => {
+          console.error("Failed to emit a Click Event", error);
+        }),
+    );
+  } catch (error) {
+    // Analytics configuration is deliberately outside the redirect availability path.
+    console.error("Failed to initialize Click Analytics", error);
+  }
 }
 
 function createResolutionCacheKey(requestUrl: URL, alias: string): Request {

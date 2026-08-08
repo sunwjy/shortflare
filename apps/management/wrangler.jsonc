@@ -18,8 +18,13 @@
   "queues": {
     "consumers": [
       {
+        "dead_letter_queue": "shortflare-events-dlq",
+        "max_batch_size": 10,
         "queue": "shortflare-events",
+        "max_concurrency": 1,
+        "max_retries": 3,
         "max_batch_timeout": 1,
+        "retry_delay": 60,
       },
     ],
   },

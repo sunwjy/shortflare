@@ -1,9 +1,10 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
+import type { ClickObservation } from "@shortflare/analytics";
 import { createD1LinksPersistence } from "@shortflare/database";
 import { createLinks } from "@shortflare/links";
-import app from "../src/index";
+import app, { createRedirectApp } from "../src/index";
 import { createTestExecutionContext } from "./execution-context";
 
 describe("redirect worker", () => {
@@ -45,6 +46,68 @@ describe("redirect worker", () => {
       "https://example.com/guide?tag=stored&source=shortflare",
     );
     expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("emits only successful GET redirects without making delivery a response dependency", async () => {
+    const links = createLinks({
+      persistence: createD1LinksPersistence(env.DB),
+      redirectDomain: "short.test",
+    });
+    const created = await links.execute(
+      {
+        kind: "create",
+        alias: "Measured",
+        title: "Measured Link",
+        destination: "https://example.com/measured",
+      },
+      { id: "system:test" },
+    );
+    if (!created.ok || created.kind !== "link") {
+      throw new Error("expected Link creation to succeed");
+    }
+    const observations: ClickObservation[] = [];
+    const measuredApp = createRedirectApp({
+      createClickAnalytics: () => ({
+        async record(input) {
+          observations.push(input);
+          throw new Error("Queue unavailable");
+        },
+      }),
+    });
+    const getExecution = createTestExecutionContext();
+
+    const getResponse = await measuredApp.request(
+      "http://short.test/Measured",
+      {
+        headers: {
+          "cf-connecting-ip": "203.0.113.10",
+          referer: "https://news.example.com/story",
+          "user-agent": "Mozilla/5.0 Chrome/140.0 Safari/537.36",
+        },
+      },
+      env,
+      getExecution.executionContext,
+    );
+    await getExecution.waitForPending();
+    const headExecution = createTestExecutionContext();
+    const headResponse = await measuredApp.request(
+      "http://short.test/Measured",
+      { method: "HEAD" },
+      env,
+      headExecution.executionContext,
+    );
+    await headExecution.waitForPending();
+
+    expect(getResponse.status).toBe(302);
+    expect(headResponse.status).toBe(302);
+    expect(observations).toEqual([
+      expect.objectContaining({
+        linkId: created.link.id,
+        destinationVersionId: created.link.destinationVersions[0]?.id,
+        clientIp: "203.0.113.10",
+        referrer: "https://news.example.com/story",
+      }),
+    ]);
   });
 
   it("rejects methods other than GET and HEAD before routing", async () => {

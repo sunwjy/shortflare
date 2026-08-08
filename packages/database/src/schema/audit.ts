@@ -13,6 +13,7 @@ export type AuditMetadata = Readonly<{
   toRole?: "administrator" | "member" | "viewer";
   fromUserState?: "invited" | "active" | "suspended";
   toUserState?: "invited" | "active" | "suspended";
+  analyticsDate?: string;
 }>;
 
 export const auditEvents = sqliteTable(
@@ -44,6 +45,8 @@ export const auditEvents = sqliteTable(
         "password-reset-use",
         "password-change",
         "operator-recovery",
+        "analytics-erase",
+        "analytics-recalculate",
       ],
     }).notNull(),
     subjectId: text("subject_id").notNull(),
@@ -77,7 +80,9 @@ export const auditEvents = sqliteTable(
         'password-reset-issue',
         'password-reset-use',
         'password-change',
-        'operator-recovery'
+        'operator-recovery',
+        'analytics-erase',
+        'analytics-recalculate'
       )`,
     ),
     check("audit_events_subject_id_check", sql`length(${table.subjectId}) BETWEEN 1 AND 128`),

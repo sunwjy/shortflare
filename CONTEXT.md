@@ -85,16 +85,64 @@ A non-redirecting Link that remains visible in normal management views and keeps
 _Avoid_: Deleted link, archived link
 
 **Destination Version**:
-A destination that a Link used during a specific period. Changing a Link creates a new Destination Version rather than overwriting the previous one.
+A destination that a Link used during a specific period; changing a Link creates a new Destination Version rather than overwriting the previous one. Analytics is retained both Link-wide and per Destination Version, whose Unique Human Click counts are not additive across Versions.
 _Avoid_: Destination history, old URL
+
+**Click Event**:
+An analytics observation of a successful `GET` redirect through an Active Link, identified by an immutable Event ID. Redelivery of the same ID and content is the same Click Event, while the same ID with different content is an integrity conflict; `HEAD` requests and responses that do not redirect are not Click Events.
+_Avoid_: Redirect event, analytics event
+
+**Click Time**:
+The UTC moment when an Active Link successfully redirects the request that produced a Click Event. Analytics buckets and retention use this moment rather than the later ingestion time.
+_Avoid_: Ingestion time, processing time
 
 **Human Click**:
 A recorded request to a Link that is classified as human rather than a suspected bot. Repeated requests are counted separately.
 _Avoid_: Click, visit
 
+**Suspected Bot Click**:
+A Click Event classified as likely automated because its transient request metadata is missing or matches a known crawler, link-preview, command-line client, or headless-automation pattern. The classification is approximate, never blocks the redirect, and Suspected Bot Clicks are excluded from Human Click metrics by default.
+_Avoid_: Bot, bot click, crawler
+
+**Pseudonymous Visitor**:
+A short-lived, Link-scoped representation derived from client IP and User-Agent only while handling a request and used to approximate repeated Human Clicks. The source values are never retained, the representation cannot be correlated across Links, and it is not a person or persistent identity.
+_Avoid_: Visitor, unique visitor, fingerprint
+
 **Unique Human Click**:
-An approximate count that treats repeated Human Clicks on the same Link by the same pseudonymous visitor within 30 minutes as one.
+An approximate count that treats repeated Human Clicks on the same Link by the same Pseudonymous Visitor in one fixed UTC half-hour bucket as one. Hourly and Daily Rollups sum these half-hour counts, so crossing a bucket boundary begins a new count even when less than 30 minutes have elapsed.
 _Avoid_: Unique visitor, unique click
+
+**Referrer Domain**:
+The lowercase ASCII hostname of a Click Event's valid HTTP or HTTPS referrer, without other URL components. A missing referrer is Direct, while an invalid or unsupported referrer is Unknown; the full referrer URL is never retained.
+_Avoid_: Referrer URL, source URL
+
+**Country**:
+The uppercase ISO 3166-1 alpha-2 country associated with a Click Event by Cloudflare. Missing, special-purpose, or non-country values are Unknown; finer-grained location data is not retained.
+_Avoid_: Location, region, geography
+
+**Device Category**:
+One of Desktop, Mobile, Tablet, Other, or Unknown, derived transiently from a Click Event's User-Agent. Browser, operating-system, and device-model details are not retained.
+_Avoid_: Device type, platform
+
+**Hourly Rollup**:
+Aggregated analytics for one UTC hour, retained for 90 days from that hour. It can be recomputed while its source Click Events remain available.
+_Avoid_: Hourly stats, hourly summary
+
+**Daily Rollup**:
+Aggregated analytics for one UTC day, retained until explicitly deleted even after its source Click Events expire. A Daily Rollup older than 90 days cannot be recomputed from raw data.
+_Avoid_: Daily stats, daily summary
+
+**Analytics Breakdown**:
+An analytics metric grouped independently by one of Referrer Domain, Country, Device Category, or bot classification within a Link or Destination Version. Referrer, Country, and Device breakdowns retain Human and Unique Human Clicks; bot classification retains Human and Suspected Bot Clicks, and MVP breakdowns do not combine dimensions.
+_Avoid_: Segment, cross-filter
+
+**Analytics Erasure**:
+The atomic removal of raw events, uniqueness records, and Hourly and Daily Rollups for one Link or the entire Instance without removing Links or Audit Events. It cannot target a Destination Version, Event ID, or Pseudonymous Visitor.
+_Avoid_: Visitor deletion, analytics reset
+
+**Analytics Recalculation**:
+The atomic replacement of all uniqueness records and Hourly and Daily Rollups for one Link on one UTC date using retained raw Click Events. A date with incomplete raw retention cannot be recalculated.
+_Avoid_: Partial rebuild, analytics refresh
 
 **Archived Link**:
 A recoverable Link that no longer redirects while retaining its Alias, analytics, and change history.
