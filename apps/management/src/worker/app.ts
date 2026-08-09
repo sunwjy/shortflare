@@ -4,6 +4,8 @@ import { createLinks } from "@shortflare/links";
 
 import { hasCapability } from "./access-control";
 import type { ManagementDependencies } from "./dependencies";
+import { createD1AuditEvents } from "./modules/audit";
+import { createAuditHttpRoutes } from "./modules/audit/http/routes";
 import { createIdentity, type Identity } from "./modules/identity";
 import { createAnalyticsHttpRoutes } from "./modules/analytics/http/routes";
 import { createIdentityHttpRoutes } from "./modules/identity/http/routes";
@@ -26,6 +28,7 @@ export function createManagementApp(dependencies: ManagementDependencies) {
   app.get("/api/internal/health", (context) => context.json({ status: "ok" } as const));
   app.use("/api/internal/*", rateLimits.requireManagementSource());
   app.route("/api/internal", createIdentityHttpRoutes(dependencies));
+  app.route("/api/internal", createAuditHttpRoutes(dependencies));
   app.route("/api/internal", createLinksHttpRoutes(dependencies));
   app.route("/api/internal", createAnalyticsHttpRoutes(dependencies));
 
@@ -35,6 +38,7 @@ export function createManagementApp(dependencies: ManagementDependencies) {
 const productionDependencies: ManagementDependencies = {
   createAnalytics: (bindings) =>
     createAnalytics({ persistence: createD1AnalyticsPersistence(bindings.DB) }),
+  createAuditEvents: (bindings) => createD1AuditEvents(bindings.DB),
   createIdentity: (bindings) => createIdentity({ db: bindings.DB }),
   createLinks: (bindings) =>
     createLinks({

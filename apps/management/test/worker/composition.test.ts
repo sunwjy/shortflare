@@ -51,6 +51,9 @@ describe("management app composition", () => {
       createAnalytics: () => {
         throw new Error("Links HTTP must not create Analytics");
       },
+      createAuditEvents: () => {
+        throw new Error("Links HTTP must not create Audit Events");
+      },
       createIdentity: () => {
         throw new Error("Links HTTP must not create Identity directly");
       },

@@ -52,6 +52,9 @@ describe("Management Analytics HTTP interface", () => {
 
     const app = createManagementApp({
       createAnalytics: () => analytics,
+      createAuditEvents: () => {
+        throw new Error("Analytics reads must not create Audit Events");
+      },
       createIdentity: () => {
         throw new Error("Analytics reads must not create Identity directly");
       },

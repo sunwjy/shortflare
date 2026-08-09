@@ -92,7 +92,21 @@ export const auditEvents = sqliteTable(
       sql`json_valid(${table.metadata})
           AND length(${table.metadata}) <= 2048`,
     ),
-    index("audit_events_occurred_at_idx").on(table.occurredAt),
-    index("audit_events_subject_idx").on(table.subjectId, table.occurredAt),
+    index("audit_events_occurred_at_idx").on(sql`${table.occurredAt} DESC`, sql`${table.id} ASC`),
+    index("audit_events_actor_idx").on(
+      table.actorId,
+      sql`${table.occurredAt} DESC`,
+      sql`${table.id} ASC`,
+    ),
+    index("audit_events_action_idx").on(
+      table.action,
+      sql`${table.occurredAt} DESC`,
+      sql`${table.id} ASC`,
+    ),
+    index("audit_events_subject_idx").on(
+      table.subjectId,
+      sql`${table.occurredAt} DESC`,
+      sql`${table.id} ASC`,
+    ),
   ],
 );

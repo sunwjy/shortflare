@@ -119,6 +119,9 @@ type RateLimitDecision = Readonly<{
 function testDependencies(decisions: RateLimitDecision[]): ManagementDependencies {
   return {
     createAnalytics: () => unexpectedAnalytics(),
+    createAuditEvents: () => {
+      throw new Error("Rate limit rejections must not create Audit Events");
+    },
     createIdentity: (bindings) => createIdentity({ db: bindings.DB }),
     createLinks: () => unexpectedLinks(),
     createRequestAuthentication: () => ({
