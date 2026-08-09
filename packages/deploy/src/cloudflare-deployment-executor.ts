@@ -35,6 +35,7 @@ export function createCloudflareDeploymentExecutor(
     accountId: string;
     existingDatabaseId?: string;
     existingInstanceId?: string;
+    setupToken?: string;
     releaseRoot: string;
     temporaryRoot: string;
     backupDirectory: string;
@@ -349,7 +350,7 @@ export function createCloudflareDeploymentExecutor(
       [String(input.now().getTime())],
     );
     if (existing.length > 0) return;
-    const token = Buffer.from(input.randomBytes(32)).toString("base64url");
+    const token = input.setupToken ?? Buffer.from(input.randomBytes(32)).toString("base64url");
     const tokenHash = createHash("sha256").update(token).digest("hex");
     const createdAt = input.now().getTime();
     await query(
@@ -370,7 +371,7 @@ export function createCloudflareDeploymentExecutor(
         String(createdAt + 30 * 60_000),
       ],
     );
-    setupToken = token;
+    if (input.setupToken === undefined) setupToken = token;
   }
 }
 

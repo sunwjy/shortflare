@@ -23,6 +23,7 @@ describe("Shortflare CLI contract", () => {
         mode: "json",
         approval: { kind: "non-destructive" },
         dryRun: false,
+        setupTokenFromStdin: false,
         accountId: "account-1",
         redirectDomain: "go.example.com",
         administratorEmail: "owner@example.com",
@@ -95,6 +96,7 @@ describe("Shortflare CLI contract", () => {
         mode: "json",
         action: "orphan-resources",
         approved: true,
+        secretFromStdin: false,
         resource: "primary-queue",
       },
     });

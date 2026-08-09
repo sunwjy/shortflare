@@ -61,6 +61,12 @@ function renderHumanResult(
 ) {
   if (result.ok) {
     const setupToken = result.setupToken;
+    if (command === "diagnose" && typeof result.observed === "object") {
+      return `Shortflare diagnosis:\n${JSON.stringify(result.observed, null, 2)}`;
+    }
+    if (command === "deploy" && typeof result.plan === "object") {
+      return `Shortflare deployment plan:\n${JSON.stringify(result.plan, null, 2)}`;
+    }
     return typeof setupToken === "string"
       ? `Shortflare ${command} completed.\nOne-time setup token: ${setupToken}`
       : `Shortflare ${command} completed.`;

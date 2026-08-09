@@ -30,6 +30,8 @@ export function createDeploymentApplication(
         redirectDomain: string;
         managementDomain?: string;
         backupDirectory?: string;
+        mode: "human" | "json";
+        setupTokenFromStdin: boolean;
       }>,
     ): ApplicationExecutor;
     createJournal(databaseId: string, accountId: string): DeploymentAttemptJournal;
@@ -44,6 +46,7 @@ export function createDeploymentApplication(
       }>,
     ): Promise<void>;
     approvePlan?(plan: DeploymentPlan): Promise<boolean>;
+    requestAdministratorEmail?(observed: ObservedDeploymentState): Promise<string | undefined>;
     diagnose?(accountId: string): Promise<CliApplicationResult>;
     recover?(accountId: string, command: RecoverCommand): Promise<CliApplicationResult>;
   }>,
@@ -53,12 +56,19 @@ export function createDeploymentApplication(
       const required = validateDeployCommand(command);
       if (!required.ok) return required.result;
       const observed = await input.observe(required.accountId);
+      const needsAdministratorEmail =
+        observed.kind === "absent" ||
+        observed.coherentRelease === "fresh" ||
+        observed.initialSetup === "required";
+      const administratorEmail =
+        command.administratorEmail ??
+        (needsAdministratorEmail ? await input.requestAdministratorEmail?.(observed) : undefined);
       const planned = createDeploymentPlan({
         target: input.manifest,
         observed,
         requested: {
           redirectDomain: required.redirectDomain,
-          administratorEmail: required.administratorEmail,
+          ...(administratorEmail === undefined ? {} : { administratorEmail }),
           ...(command.managementDomain === undefined
             ? {}
             : { managementDomain: command.managementDomain }),
@@ -67,6 +77,13 @@ export function createDeploymentApplication(
       if (!planned.ok) return { ok: false, exitCode: 3, error: planned };
       if (command.dryRun) {
         return { ok: true, formatVersion: 1, finalState: "planned", plan: planned.plan };
+      }
+      if (
+        command.mode === "json" &&
+        !command.setupTokenFromStdin &&
+        planned.plan.actions.some((action) => action.kind === "create-setup-handoff")
+      ) {
+        return invalidInput("Initial installation in JSON mode requires --setup-token-stdin");
       }
       const approval = await resolveApproval(planned.plan, command, input.approvePlan);
       if (approval === undefined) {
@@ -88,6 +105,8 @@ export function createDeploymentApplication(
         ...(command.backupDirectory === undefined
           ? {}
           : { backupDirectory: command.backupDirectory }),
+        mode: command.mode,
+        setupTokenFromStdin: command.setupTokenFromStdin,
       });
       const bootstrapped = await bootstrapFreshInstance(planned.plan, executor);
       if (!bootstrapped.ok) return bootstrapped.result;
@@ -147,7 +166,7 @@ export function createDeploymentApplication(
 function validateDeployCommand(
   command: DeployCommand,
 ):
-  | Readonly<{ ok: true; accountId: string; redirectDomain: string; administratorEmail: string }>
+  | Readonly<{ ok: true; accountId: string; redirectDomain: string }>
   | Readonly<{ ok: false; result: CliApplicationResult }> {
   if (command.accountId === undefined) {
     return { ok: false, result: invalidInput("--account-id is required") };
@@ -155,14 +174,10 @@ function validateDeployCommand(
   if (command.redirectDomain === undefined) {
     return { ok: false, result: invalidInput("--redirect-domain is required") };
   }
-  if (command.administratorEmail === undefined) {
-    return { ok: false, result: invalidInput("--administrator-email is required") };
-  }
   return {
     ok: true,
     accountId: command.accountId,
     redirectDomain: command.redirectDomain,
-    administratorEmail: command.administratorEmail,
   };
 }
 

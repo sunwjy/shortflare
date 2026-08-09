@@ -23,8 +23,10 @@ export async function createProductionApplication(
     platform: NodeJS.Platform;
     homeDirectory: string;
     promptApproval(plan: DeploymentPlan): Promise<boolean>;
+    promptAdministratorEmail?(): Promise<string | undefined>;
     fetch?: typeof globalThis.fetch;
     now?: () => Date;
+    secretInput?: string;
   }>,
 ) {
   const manifestInput: unknown = JSON.parse(
@@ -72,6 +74,9 @@ export async function createProductionApplication(
           ? {}
           : { managementDomain: request.managementDomain }),
         manifest: parsedManifest.value,
+        ...(request.setupTokenFromStdin && input.secretInput !== undefined
+          ? { setupToken: input.secretInput }
+          : {}),
         now,
         randomBytes,
         randomId: randomUUID,
@@ -115,6 +120,9 @@ export async function createProductionApplication(
       });
     },
     approvePlan: input.promptApproval,
+    ...(input.promptAdministratorEmail === undefined
+      ? {}
+      : { requestAdministratorEmail: input.promptAdministratorEmail }),
     diagnose: async (accountId) => {
       const observed = await observeCloudflareDeployment({
         api,
@@ -146,11 +154,11 @@ export async function createProductionApplication(
           return recoveryRefused("Recovery requires a marked Shortflare Instance");
         }
         if (command.action === "analytics-secret") {
-          await wrangler.putSecret(
-            "shortflare-redirect",
-            "ANALYTICS_HMAC_KEY",
-            randomBytes(32).toString("base64url"),
-          );
+          const analyticsSecret =
+            command.secretFromStdin && input.secretInput !== undefined
+              ? input.secretInput
+              : randomBytes(32).toString("base64url");
+          await wrangler.putSecret("shortflare-redirect", "ANALYTICS_HMAC_KEY", analyticsSecret);
           return {
             ok: true,
             formatVersion: 1,
@@ -186,7 +194,10 @@ export async function createProductionApplication(
         if (!isSetupEligible(row)) {
           return recoveryRefused("Initial setup was completed or an active Administrator exists");
         }
-        const token = randomBytes(32).toString("base64url");
+        const token =
+          command.secretFromStdin && input.secretInput !== undefined
+            ? input.secretInput
+            : randomBytes(32).toString("base64url");
         const createdAt = now().getTime();
         const written = await api.queryD1(
           accountId,
@@ -209,7 +220,12 @@ export async function createProductionApplication(
           ],
         );
         if (!written.ok) return recoveryRefused(`D1 query failed with ${written.kind}`);
-        return { ok: true, formatVersion: 1, action: command.action, setupToken: token };
+        return {
+          ok: true,
+          formatVersion: 1,
+          action: command.action,
+          ...(command.secretFromStdin ? {} : { setupToken: token }),
+        };
       } catch (error: unknown) {
         return {
           ok: false,

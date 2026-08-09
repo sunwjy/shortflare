@@ -37,7 +37,7 @@ export type ObservedDeploymentState = FreshAccountState | ExistingInstanceState;
 export type DeploymentRequest = Readonly<{
   redirectDomain: string;
   managementDomain?: string;
-  administratorEmail: string;
+  administratorEmail?: string;
 }>;
 
 export type DeploymentAction =
@@ -91,6 +91,11 @@ export type CreateDeploymentPlanResult =
     }>
   | Readonly<{
       ok: false;
+      kind: "administrator-email-required";
+      recovery: "provide-administrator-email";
+    }>
+  | Readonly<{
+      ok: false;
       kind: "management-address-required";
       recovery: "provide-management-domain-or-register-workers-dev";
     }>
@@ -120,6 +125,17 @@ export function createDeploymentPlan(
     requested: DeploymentRequest;
   }>,
 ): CreateDeploymentPlanResult {
+  const requiresAdministratorEmail =
+    input.observed.kind === "absent" ||
+    input.observed.coherentRelease === "fresh" ||
+    input.observed.initialSetup === "required";
+  if (requiresAdministratorEmail && input.requested.administratorEmail === undefined) {
+    return {
+      ok: false,
+      kind: "administrator-email-required",
+      recovery: "provide-administrator-email",
+    };
+  }
   if (input.observed.kind === "present") {
     const targetsCurrentRelease = input.observed.coherentRelease === input.target.release;
     if (
@@ -188,7 +204,7 @@ export function createDeploymentPlan(
           actions: [
             {
               kind: "create-setup-handoff",
-              administratorEmail: input.requested.administratorEmail,
+              administratorEmail: administratorEmail(input.requested),
             },
           ],
         }),
@@ -347,7 +363,7 @@ function installActions(
     { kind: "record-coherent-release", release: input.target.release },
     {
       kind: "create-setup-handoff",
-      administratorEmail: input.requested.administratorEmail,
+      administratorEmail: administratorEmail(input.requested),
     },
   ];
 }
@@ -356,4 +372,11 @@ function finalizePlan(plan: UnsignedDeploymentPlan): DeploymentPlan {
   // Approval covers the exact ordered actions while secret material remains outside the plan.
   const digest = createHash("sha256").update(JSON.stringify(plan)).digest("hex");
   return { ...plan, digest };
+}
+
+function administratorEmail(request: DeploymentRequest): string {
+  if (request.administratorEmail === undefined) {
+    throw new Error("Administrator email precondition was not enforced");
+  }
+  return request.administratorEmail;
 }

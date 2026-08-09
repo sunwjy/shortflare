@@ -2,6 +2,10 @@
   "name": "shortflare",
   "version": "0.0.0",
   "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sunwjy/shortflare.git"
+  },
   "bin": {
     "shortflare": "./dist/bin.js"
   },
@@ -12,6 +16,10 @@
   "type": "module",
   "types": "./dist/index.d.ts",
   "exports": "./dist/index.js",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node dist/assemble-release.js",
     "test": "vitest run",
@@ -26,5 +34,8 @@
     "@shortflare/management": "workspace:*",
     "@shortflare/redirect-worker": "workspace:*",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

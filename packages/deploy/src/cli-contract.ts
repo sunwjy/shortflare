@@ -15,6 +15,7 @@ export type DeployCommand = Readonly<{
   managementDomain?: string;
   administratorEmail?: string;
   backupDirectory?: string;
+  setupTokenFromStdin: boolean;
 }>;
 
 export type DiagnoseCommand = Readonly<{
@@ -39,6 +40,7 @@ export type RecoverCommand = Readonly<{
   administratorEmail?: string;
   worker?: "management" | "redirect";
   versionTag?: string;
+  secretFromStdin: boolean;
 }>;
 
 export type CliCommand = DeployCommand | DiagnoseCommand | RecoverCommand;
@@ -94,6 +96,7 @@ function parseDeploy(arguments_: readonly string[]): ParseCliArgumentsResult {
       "management-domain": { type: "string" },
       "administrator-email": { type: "string" },
       "backup-dir": { type: "string" },
+      "setup-token-stdin": { type: "boolean" },
     },
   });
   const mode = parsed.values.json === true ? "json" : "human";
@@ -132,6 +135,7 @@ function parseDeploy(arguments_: readonly string[]): ParseCliArgumentsResult {
       mode,
       approval,
       dryRun,
+      setupTokenFromStdin: parsed.values["setup-token-stdin"] === true,
       ...optional("accountId", parsed.values["account-id"]),
       ...optional("redirectDomain", parsed.values["redirect-domain"]),
       ...optional("managementDomain", parsed.values["management-domain"]),
@@ -176,6 +180,7 @@ function parseRecover(arguments_: readonly string[]): ParseCliArgumentsResult {
       "administrator-email": { type: "string" },
       worker: { type: "string" },
       "version-tag": { type: "string" },
+      "secret-stdin": { type: "boolean" },
     },
   });
   const [action, ...extraPositionals] = parsed.positionals;
@@ -202,8 +207,8 @@ function parseRecover(arguments_: readonly string[]): ParseCliArgumentsResult {
   if (action === "setup-token" && parsed.values["administrator-email"] === undefined) {
     return invalidInput("setup-token requires --administrator-email");
   }
-  if (action === "setup-token" && mode === "json") {
-    return invalidInput("setup-token recovery requires an interactive terminal");
+  if (action === "setup-token" && mode === "json" && parsed.values["secret-stdin"] !== true) {
+    return invalidInput("JSON setup-token recovery requires --secret-stdin");
   }
   const worker = parsed.values.worker;
   if (
@@ -220,6 +225,7 @@ function parseRecover(arguments_: readonly string[]): ParseCliArgumentsResult {
       mode,
       action,
       approved: true,
+      secretFromStdin: parsed.values["secret-stdin"] === true,
       ...optional("accountId", parsed.values["account-id"]),
       ...optional("resource", parsed.values.resource),
       ...optional("administratorEmail", parsed.values["administrator-email"]),

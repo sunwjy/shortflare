@@ -43,14 +43,9 @@ A rejected message retries three times at 60-second intervals before moving to
 the DLQ.
 
 Queue retention belongs to the Cloudflare Queue resource rather than the Worker
-binding in `wrangler.jsonc`. Until Roadmap 10 automates provisioning, create both
-resources with the explicit 86,400-second policy and verify the same setting in
-the resolved Cloudflare account before deployment:
-
-```sh
-wrangler queues create shortflare-events --message-retention-period-secs 86400
-wrangler queues create shortflare-events-dlq --message-retention-period-secs 86400
-```
+binding in `wrangler.jsonc`. The deployment CLI creates or updates both
+resources with the explicit 86,400-second policy and verifies the resolved
+setting before Worker deployment:
 
 For existing resources, inspect and update the resolved Queue settings through
 Cloudflare before deploying; do not recreate a non-empty Queue to change this
