@@ -142,3 +142,56 @@ export const instanceAnalyticsResponseSchema = z.strictObject({
     truncated: z.boolean(),
   }),
 });
+
+const auditMetadataSchema = z.strictObject({
+  alias: z.string().optional(),
+  changedFields: z.array(z.enum(["title", "destination"])).optional(),
+  fromState: z.enum(["active", "disabled", "archived"]).optional(),
+  toState: z.enum(["active", "disabled", "archived"]).optional(),
+  destinationVersionId: z.string().optional(),
+  fromRole: z.enum(["administrator", "member", "viewer"]).optional(),
+  toRole: z.enum(["administrator", "member", "viewer"]).optional(),
+  fromUserState: z.enum(["invited", "active", "suspended"]).optional(),
+  toUserState: z.enum(["invited", "active", "suspended"]).optional(),
+  analyticsDate: z.string().optional(),
+});
+
+export const auditEventsPageResponseSchema = pageSchema(
+  z.strictObject({
+    id: z.string(),
+    occurredAt: z.string(),
+    actor: z.strictObject({ id: z.string(), display: z.string().nullable() }),
+    action: z.enum([
+      "create",
+      "edit",
+      "update-title",
+      "update-destination",
+      "activate",
+      "disable",
+      "archive",
+      "restore",
+      "permanently-delete",
+      "release-alias",
+      "initial-administrator-activate",
+      "invitation-issue",
+      "invitation-reissue",
+      "invitation-accept",
+      "invitation-cancel",
+      "role-change",
+      "user-suspend",
+      "user-reactivate",
+      "password-reset-issue",
+      "password-reset-use",
+      "password-change",
+      "operator-recovery",
+      "analytics-erase",
+      "analytics-recalculate",
+    ]),
+    subject: z.strictObject({
+      id: z.string(),
+      kind: z.enum(["instance", "link", "user"]),
+      display: z.string().nullable(),
+    }),
+    metadata: auditMetadataSchema,
+  }),
+);

@@ -1,5 +1,5 @@
 import { getRouteApi, Link, Outlet } from "@tanstack/react-router";
-import { ChartNoAxesCombined, Link2, LogOut, Menu, Shield, Users } from "lucide-react";
+import { ChartNoAxesCombined, Link2, ListChecks, LogOut, Menu, Shield, Users } from "lucide-react";
 import { useState } from "react";
 
 import { noContentRequest } from "./api";
@@ -71,14 +71,24 @@ export function AppShell() {
             Analytics
           </Link>
           {session.user.role === "administrator" && (
-            <Link
-              className={navigationLinkClass}
-              to="/users"
-              activeProps={{ "aria-current": "page" }}
-            >
-              <Users aria-hidden="true" size={20} strokeWidth={1.75} />
-              Users
-            </Link>
+            <>
+              <Link
+                className={navigationLinkClass}
+                to="/users"
+                activeProps={{ "aria-current": "page" }}
+              >
+                <Users aria-hidden="true" size={20} strokeWidth={1.75} />
+                Users
+              </Link>
+              <Link
+                className={navigationLinkClass}
+                to="/audit"
+                activeProps={{ "aria-current": "page" }}
+              >
+                <ListChecks aria-hidden="true" size={20} strokeWidth={1.75} />
+                Audit
+              </Link>
+            </>
           )}
           <Link
             className={navigationLinkClass}
@@ -150,10 +160,24 @@ export function AppShell() {
             Analytics
           </Link>
           {session.user.role === "administrator" && (
-            <Link className={navigationLinkClass} to="/users" onClick={() => setMobileMenu(false)}>
-              <Users aria-hidden="true" size={20} strokeWidth={1.75} />
-              Users
-            </Link>
+            <>
+              <Link
+                className={navigationLinkClass}
+                to="/users"
+                onClick={() => setMobileMenu(false)}
+              >
+                <Users aria-hidden="true" size={20} strokeWidth={1.75} />
+                Users
+              </Link>
+              <Link
+                className={navigationLinkClass}
+                to="/audit"
+                onClick={() => setMobileMenu(false)}
+              >
+                <ListChecks aria-hidden="true" size={20} strokeWidth={1.75} />
+                Audit
+              </Link>
+            </>
           )}
           <Link className={navigationLinkClass} to="/security" onClick={() => setMobileMenu(false)}>
             <Shield aria-hidden="true" size={20} strokeWidth={1.75} />
