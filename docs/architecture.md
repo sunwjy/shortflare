@@ -922,7 +922,6 @@ and idempotent.
 ## Deliberately open details
 
 - The password KDF and parameters, pending Workers CPU benchmarks.
-- The concrete rate-limit adapter and initial thresholds.
 - Analytics Engine implementation and mode-switch UX after the MVP.
 
 These choices must respect the interfaces and constraints above but do not
