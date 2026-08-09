@@ -13,7 +13,8 @@ describe("pinned Wrangler adapter", () => {
     });
 
     await adapter.applyMigrations("/bundle/management/wrangler.json");
-    await adapter.deployWorker("/bundle/management/wrangler.json", "manage.example.com");
+    await adapter.uploadWorker("/bundle/management/wrangler.json", "1.0.0-management");
+    await adapter.activateWorker("/bundle/management/wrangler.json", "1.0.0-management");
 
     expect(calls).toEqual([
       {
@@ -29,13 +30,25 @@ describe("pinned Wrangler adapter", () => {
       },
       {
         arguments: [
-          "deploy",
+          "versions",
+          "upload",
           "--config",
           "/bundle/management/wrangler.json",
           "--strict",
           "--keep-vars",
-          "--domain",
-          "manage.example.com",
+          "--tag",
+          "1.0.0-management",
+        ],
+      },
+      {
+        arguments: [
+          "versions",
+          "deploy",
+          "--config",
+          "/bundle/management/wrangler.json",
+          "--version-tag",
+          "1.0.0-management",
+          "--yes",
         ],
       },
     ]);

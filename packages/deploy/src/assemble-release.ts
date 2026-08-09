@@ -35,10 +35,13 @@ export async function assembleReleaseBundle(
   const migrationNames = (await readdir(migrationsDestination)).filter((name) =>
     name.endsWith(".sql"),
   );
+  const schemaVersion = Math.max(
+    ...migrationNames.map((name) => Number.parseInt(name.slice(0, 4), 10)),
+  );
   const manifestInput = {
     formatVersion: 1,
     release: input.release,
-    schema: { version: migrationNames.length, journalSha256 },
+    schema: { version: schemaVersion, journalSha256, migrations: migrationNames.toSorted() },
     supportedSources: ["fresh"],
     rollbackSafeFrom: [],
     artifacts: {

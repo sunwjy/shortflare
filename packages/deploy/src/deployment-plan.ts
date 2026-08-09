@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { ReleaseManifest } from "./release-manifest.js";
+import { hashReleaseManifest, type ReleaseManifest } from "./release-manifest.js";
 
 export type FreshAccountState = Readonly<{
   kind: "absent";
@@ -42,11 +42,11 @@ export type DeploymentAction =
       role: "primary" | "dead-letter";
     }>
   | Readonly<{
-      kind: "configure-domains";
-      redirectDomain: string;
-      management:
+      kind: "configure-domain";
+      worker: "management" | "redirect";
+      domain:
         | Readonly<{ kind: "workers-dev" }>
-        | Readonly<{ kind: "custom-domain"; domain: string }>;
+        | Readonly<{ kind: "custom-domain"; hostname: string }>;
     }>
   | Readonly<{ kind: "configure-analytics-secret" }>
   | Readonly<{ kind: "upload-worker"; worker: "management" | "redirect" }>
@@ -63,6 +63,7 @@ export type DeploymentPlan = Readonly<{
   accountId: string;
   sourceRelease: "fresh" | string;
   targetRelease: string;
+  targetManifestDigest: string;
   destructive: boolean;
   actions: readonly DeploymentAction[];
   digest: string;
@@ -139,6 +140,21 @@ export function createDeploymentPlan(
       };
     }
 
+    if (input.observed.coherentRelease === "fresh") {
+      return {
+        ok: true,
+        plan: finalizePlan({
+          operation: "install",
+          accountId: input.observed.accountId,
+          sourceRelease: "fresh",
+          targetRelease: input.target.release,
+          targetManifestDigest: hashReleaseManifest(input.target),
+          destructive: false,
+          actions: installActions(input, false),
+        }),
+      };
+    }
+
     if (input.observed.analyticsSecret === "missing") {
       return {
         ok: false,
@@ -159,6 +175,7 @@ export function createDeploymentPlan(
           accountId: input.observed.accountId,
           sourceRelease: input.observed.coherentRelease,
           targetRelease: input.target.release,
+          targetManifestDigest: hashReleaseManifest(input.target),
           destructive: false,
           actions: [],
         }),
@@ -172,6 +189,7 @@ export function createDeploymentPlan(
         accountId: input.observed.accountId,
         sourceRelease: input.observed.coherentRelease,
         targetRelease: input.target.release,
+        targetManifestDigest: hashReleaseManifest(input.target),
         destructive: false,
         actions: [
           ...(input.observed.pendingMigrations.length > 0
@@ -220,43 +238,67 @@ export function createDeploymentPlan(
       accountId: input.observed.accountId,
       sourceRelease: "fresh",
       targetRelease: input.target.release,
+      targetManifestDigest: hashReleaseManifest(input.target),
       destructive: false,
-      actions: [
-        { kind: "create-d1", resource: "shortflare" },
-        { kind: "write-deployment-marker" },
-        {
-          kind: "create-queue",
-          resource: "shortflare-events-dlq",
-          role: "dead-letter",
-        },
-        {
-          kind: "create-queue",
-          resource: "shortflare-events",
-          role: "primary",
-        },
-        {
-          kind: "configure-domains",
-          redirectDomain: input.requested.redirectDomain,
-          management:
-            input.requested.managementDomain === undefined
-              ? { kind: "workers-dev" }
-              : { kind: "custom-domain", domain: input.requested.managementDomain },
-        },
-        { kind: "configure-analytics-secret" },
-        { kind: "upload-worker", worker: "management" },
-        { kind: "activate-worker", worker: "management" },
-        { kind: "verify-worker", worker: "management" },
-        { kind: "upload-worker", worker: "redirect" },
-        { kind: "activate-worker", worker: "redirect" },
-        { kind: "verify-worker", worker: "redirect" },
-        { kind: "record-coherent-release", release: input.target.release },
-        {
-          kind: "create-setup-handoff",
-          administratorEmail: input.requested.administratorEmail,
-        },
-      ],
+      actions: installActions(input, true),
     }),
   };
+}
+
+function installActions(
+  input: Readonly<{
+    target: ReleaseManifest;
+    observed: ObservedDeploymentState;
+    requested: DeploymentRequest;
+  }>,
+  includeFoundation: boolean,
+): readonly DeploymentAction[] {
+  return [
+    ...(includeFoundation
+      ? ([
+          { kind: "create-d1", resource: "shortflare" },
+          { kind: "apply-migrations", migrations: input.target.schema.migrations },
+          { kind: "write-deployment-marker" },
+        ] as const)
+      : input.observed.kind === "present" && input.observed.pendingMigrations.length > 0
+        ? ([{ kind: "apply-migrations", migrations: input.observed.pendingMigrations }] as const)
+        : []),
+    {
+      kind: "create-queue",
+      resource: "shortflare-events-dlq",
+      role: "dead-letter",
+    },
+    {
+      kind: "create-queue",
+      resource: "shortflare-events",
+      role: "primary",
+    },
+    { kind: "configure-analytics-secret" },
+    { kind: "upload-worker", worker: "management" },
+    { kind: "activate-worker", worker: "management" },
+    {
+      kind: "configure-domain",
+      worker: "management",
+      domain:
+        input.requested.managementDomain === undefined
+          ? { kind: "workers-dev" }
+          : { kind: "custom-domain", hostname: input.requested.managementDomain },
+    },
+    { kind: "verify-worker", worker: "management" },
+    { kind: "upload-worker", worker: "redirect" },
+    { kind: "activate-worker", worker: "redirect" },
+    {
+      kind: "configure-domain",
+      worker: "redirect",
+      domain: { kind: "custom-domain", hostname: input.requested.redirectDomain },
+    },
+    { kind: "verify-worker", worker: "redirect" },
+    { kind: "record-coherent-release", release: input.target.release },
+    {
+      kind: "create-setup-handoff",
+      administratorEmail: input.requested.administratorEmail,
+    },
+  ];
 }
 
 function finalizePlan(plan: UnsignedDeploymentPlan): DeploymentPlan {

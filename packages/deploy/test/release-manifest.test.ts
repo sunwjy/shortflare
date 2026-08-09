@@ -10,6 +10,7 @@ describe("Shortflare Release manifest", () => {
       schema: {
         version: 5,
         journalSha256: "1".repeat(64),
+        migrations: ["0000_initial_schema.sql", "0005_deployment_control.sql"],
       },
       supportedSources: ["fresh", "0.9.0"],
       rollbackSafeFrom: ["0.9.0"],
@@ -42,6 +43,7 @@ describe("Shortflare Release manifest", () => {
       schema: {
         version: 5,
         journalSha256: "1".repeat(64),
+        migrations: ["0000_initial_schema.sql", "0005_deployment_control.sql"],
       },
       supportedSources: ["fresh"],
       rollbackSafeFrom: [],

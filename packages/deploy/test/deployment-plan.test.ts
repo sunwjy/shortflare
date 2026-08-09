@@ -30,23 +30,29 @@ describe("Deployment Reconciliation plan", () => {
         accountId: "account-1",
         sourceRelease: "fresh",
         targetRelease: "1.0.0",
+        targetManifestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
         destructive: false,
         actions: [
           { kind: "create-d1", resource: "shortflare" },
+          {
+            kind: "apply-migrations",
+            migrations: ["0000_initial_schema.sql", "0005_deployment_control.sql"],
+          },
           { kind: "write-deployment-marker" },
           { kind: "create-queue", resource: "shortflare-events-dlq", role: "dead-letter" },
           { kind: "create-queue", resource: "shortflare-events", role: "primary" },
-          {
-            kind: "configure-domains",
-            redirectDomain: "go.example.com",
-            management: { kind: "workers-dev" },
-          },
           { kind: "configure-analytics-secret" },
           { kind: "upload-worker", worker: "management" },
           { kind: "activate-worker", worker: "management" },
+          { kind: "configure-domain", worker: "management", domain: { kind: "workers-dev" } },
           { kind: "verify-worker", worker: "management" },
           { kind: "upload-worker", worker: "redirect" },
           { kind: "activate-worker", worker: "redirect" },
+          {
+            kind: "configure-domain",
+            worker: "redirect",
+            domain: { kind: "custom-domain", hostname: "go.example.com" },
+          },
           { kind: "verify-worker", worker: "redirect" },
           { kind: "record-coherent-release", release: "1.0.0" },
           { kind: "create-setup-handoff", administratorEmail: "owner@example.com" },
@@ -285,11 +291,48 @@ describe("Deployment Reconciliation plan", () => {
         accountId: "account-1",
         sourceRelease: "1.0.0",
         targetRelease: "1.0.0",
+        targetManifestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
         destructive: false,
         actions: [],
         digest: expect.stringMatching(/^[0-9a-f]{64}$/),
       },
     });
+  });
+
+  it("resumes a marked first installation without recreating D1 or rotating its new secret", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) throw new Error("test manifest must be valid");
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "present",
+        accountId: "account-1",
+        instanceId: "instance-1",
+        coherentRelease: "fresh",
+        schemaVersion: 5,
+        pendingMigrations: [],
+        analyticsSecret: "missing",
+        drift: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      plan: { operation: "install", sourceRelease: "fresh" },
+    });
+    if (!result.ok) throw new Error("installation resume plan must be available");
+    expect(result.plan.actions.slice(0, 4)).toMatchObject([
+      { kind: "create-queue", resource: "shortflare-events-dlq" },
+      { kind: "create-queue", resource: "shortflare-events" },
+      { kind: "configure-analytics-secret" },
+      { kind: "upload-worker", worker: "management" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("create-d1");
+    expect(JSON.stringify(result)).not.toContain("write-deployment-marker");
   });
 
   it("binds approval to the exact effective domain plan", () => {
@@ -346,6 +389,7 @@ function releaseManifest() {
     schema: {
       version: 5,
       journalSha256: "1".repeat(64),
+      migrations: ["0000_initial_schema.sql", "0005_deployment_control.sql"],
     },
     supportedSources: ["fresh", "0.9.0"],
     rollbackSafeFrom: ["0.9.0"],

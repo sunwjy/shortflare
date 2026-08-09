@@ -59,6 +59,7 @@ function plan(): DeploymentPlan {
     accountId: "account-1",
     sourceRelease: "fresh",
     targetRelease: "1.0.0",
+    targetManifestDigest: "b".repeat(64),
     destructive: false,
     actions: [],
     digest: "a".repeat(64),

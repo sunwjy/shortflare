@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 
 const semverSchema = z
@@ -19,6 +21,7 @@ const artifactSchema = z.strictObject({
   path: packageRelativePathSchema,
   sha256: sha256Schema,
 });
+const migrationNameSchema = z.string().regex(/^\d{4}_[a-z0-9_]+\.sql$/);
 
 const releaseManifestSchema = z.strictObject({
   formatVersion: z.literal(1),
@@ -26,6 +29,7 @@ const releaseManifestSchema = z.strictObject({
   schema: z.strictObject({
     version: z.number().int().nonnegative(),
     journalSha256: sha256Schema,
+    migrations: z.array(migrationNameSchema).min(1),
   }),
   supportedSources: z.array(z.union([z.literal("fresh"), semverSchema])).min(1),
   rollbackSafeFrom: z.array(semverSchema),
@@ -65,4 +69,8 @@ export function parseReleaseManifest(input: unknown): ParseReleaseManifestResult
       message: issue.message,
     })),
   };
+}
+
+export function hashReleaseManifest(manifest: ReleaseManifest): string {
+  return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }

@@ -20,7 +20,11 @@ describe("packed release bundle", () => {
     const manifest = parseReleaseManifest({
       formatVersion: 1,
       release: "1.0.0",
-      schema: { version: 1, journalSha256: "a".repeat(64) },
+      schema: {
+        version: 0,
+        journalSha256: "a".repeat(64),
+        migrations: ["0000_initial_schema.sql"],
+      },
       supportedSources: ["fresh"],
       rollbackSafeFrom: [],
       artifacts: {

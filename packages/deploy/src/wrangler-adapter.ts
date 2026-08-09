@@ -22,14 +22,27 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
         configPath,
       ]);
     },
-    async deployWorker(configPath: string, customDomain?: string): Promise<void> {
+    async uploadWorker(configPath: string, versionTag: string): Promise<void> {
       await checkedRun([
-        "deploy",
+        "versions",
+        "upload",
         "--config",
         configPath,
         "--strict",
         "--keep-vars",
-        ...(customDomain === undefined ? [] : ["--domain", customDomain]),
+        "--tag",
+        versionTag,
+      ]);
+    },
+    async activateWorker(configPath: string, versionTag: string): Promise<void> {
+      await checkedRun([
+        "versions",
+        "deploy",
+        "--config",
+        configPath,
+        "--version-tag",
+        versionTag,
+        "--yes",
       ]);
     },
     async putSecret(workerName: string, secretName: string, value: string): Promise<void> {
@@ -37,6 +50,8 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
     },
   } as const;
 }
+
+export type WranglerAdapter = ReturnType<typeof createWranglerAdapter>;
 
 export class WranglerCommandError extends Error {
   public constructor(stage: string) {

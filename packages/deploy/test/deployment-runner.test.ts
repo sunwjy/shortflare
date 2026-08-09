@@ -244,6 +244,7 @@ function deploymentPlan(): DeploymentPlan {
     accountId: "account-1",
     sourceRelease: "fresh",
     targetRelease: "1.0.0",
+    targetManifestDigest: "b".repeat(64),
     destructive: false,
     actions: [
       { kind: "write-deployment-marker" },

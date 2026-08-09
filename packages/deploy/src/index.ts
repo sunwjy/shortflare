@@ -1,4 +1,6 @@
 export { parseCliArguments } from "./cli-contract.js";
+export { runCli } from "./cli.js";
+export type { CliApplication, CliApplicationResult } from "./cli.js";
 export type {
   CliCommand,
   CliOutputMode,
@@ -9,11 +11,14 @@ export type {
   RecoveryAction,
 } from "./cli-contract.js";
 export { createCloudflareApi } from "./cloudflare-api.js";
+export { createCloudflareDeploymentExecutor } from "./cloudflare-deployment-executor.js";
+export type { CloudflareDeploymentOutput } from "./cloudflare-deployment-executor.js";
 export type {
   CloudflareApi,
   CloudflareApiFailure,
   CloudflareQueue,
   D1Database,
+  WorkerDomain,
 } from "./cloudflare-api.js";
 export {
   createD1DeploymentJournal,
@@ -50,11 +55,11 @@ export type { InstanceConfig, ParseInstanceConfigResult } from "./local-instance
 export { hashReleaseArtifact, verifyReleaseBundle } from "./release-bundle.js";
 export type { VerifyReleaseBundleResult } from "./release-bundle.js";
 export { prepareWorkerArtifacts } from "./resolved-worker-artifacts.js";
-export { parseReleaseManifest } from "./release-manifest.js";
+export { hashReleaseManifest, parseReleaseManifest } from "./release-manifest.js";
 export type {
   ParseReleaseManifestResult,
   ReleaseManifest,
   ReleaseManifestIssue,
 } from "./release-manifest.js";
 export { createWranglerAdapter, WranglerCommandError } from "./wrangler-adapter.js";
-export type { WranglerRun } from "./wrangler-adapter.js";
+export type { WranglerAdapter, WranglerRun } from "./wrangler-adapter.js";

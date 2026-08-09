@@ -22,6 +22,7 @@ export type CloudflareQueue = Readonly<{
     messageRetentionPeriod: number;
   }>;
 }>;
+export type WorkerDomain = Readonly<{ id: string; hostname: string; worker: string }>;
 
 export type CloudflareApi = Readonly<{
   listD1Databases(
@@ -51,6 +52,25 @@ export type CloudflareApi = Readonly<{
     | Readonly<{ ok: true; state: "pending" }>
     | Readonly<{ ok: true; state: "ready"; downloadUrl: string }>
   >;
+  getWorkersSubdomain(
+    accountId: string,
+  ): Promise<
+    | CloudflareApiFailure
+    | Readonly<{ ok: true; registered: false }>
+    | Readonly<{ ok: true; registered: true; subdomain: string }>
+  >;
+  listWorkerDomains(
+    accountId: string,
+  ): Promise<CloudflareApiFailure | Readonly<{ ok: true; domains: readonly WorkerDomain[] }>>;
+  attachWorkerDomain(
+    accountId: string,
+    hostname: string,
+    workerName: string,
+  ): Promise<CloudflareApiFailure | Readonly<{ ok: true; domain: WorkerDomain }>>;
+  listWorkerSecretNames(
+    accountId: string,
+    workerName: string,
+  ): Promise<CloudflareApiFailure | Readonly<{ ok: true; names: readonly string[] }>>;
   listQueues(
     accountId: string,
   ): Promise<CloudflareApiFailure | Readonly<{ ok: true; queues: readonly CloudflareQueue[] }>>;
@@ -84,6 +104,13 @@ const d1ExportSchema = z.looseObject({
   at_bookmark: z.string().optional(),
   signed_url: z.url().optional(),
 });
+const workersSubdomainSchema = z.looseObject({ subdomain: z.string().min(1) });
+const workerDomainSchema = z.looseObject({
+  id: z.string().min(1),
+  hostname: z.string().min(1),
+  service: z.string().min(1),
+});
+const workerSecretSchema = z.looseObject({ name: z.string().min(1), type: z.string() });
 
 export function createCloudflareApi(
   input: Readonly<{
@@ -200,6 +227,63 @@ export function createCloudflareApi(
       return response.result.signed_url === undefined
         ? { ok: true, state: "pending" }
         : { ok: true, state: "ready", downloadUrl: response.result.signed_url };
+    },
+
+    async getWorkersSubdomain(accountId) {
+      const response = await request(
+        "GET",
+        `/accounts/${encodeURIComponent(accountId)}/workers/subdomain`,
+        workersSubdomainSchema,
+      );
+      if (!response.ok) {
+        return response.status === 404 ? { ok: true, registered: false } : response;
+      }
+      return { ok: true, registered: true, subdomain: response.result.subdomain };
+    },
+
+    async listWorkerDomains(accountId) {
+      const response = await request(
+        "GET",
+        `/accounts/${encodeURIComponent(accountId)}/workers/domains`,
+        z.array(workerDomainSchema),
+      );
+      if (!response.ok) return response;
+      return {
+        ok: true,
+        domains: response.result.map((domain) => ({
+          id: domain.id,
+          hostname: domain.hostname,
+          worker: domain.service,
+        })),
+      };
+    },
+
+    async attachWorkerDomain(accountId, hostname, workerName) {
+      const response = await request(
+        "PUT",
+        `/accounts/${encodeURIComponent(accountId)}/workers/domains`,
+        workerDomainSchema,
+        { hostname, service: workerName },
+      );
+      if (!response.ok) return response;
+      return {
+        ok: true,
+        domain: {
+          id: response.result.id,
+          hostname: response.result.hostname,
+          worker: response.result.service,
+        },
+      };
+    },
+
+    async listWorkerSecretNames(accountId, workerName) {
+      const response = await request(
+        "GET",
+        `/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}/secrets`,
+        z.array(workerSecretSchema),
+      );
+      if (!response.ok) return response.status === 404 ? { ok: true, names: [] } : response;
+      return { ok: true, names: response.result.map((secret) => secret.name) };
     },
 
     async listQueues(accountId) {

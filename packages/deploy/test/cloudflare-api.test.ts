@@ -129,6 +129,44 @@ describe("Cloudflare REST control-plane adapter", () => {
     expect(bodies).toEqual([{ output_format: "polling" }, { current_bookmark: "bookmark-1" }]);
   });
 
+  it("discovers Workers addresses, domains, and secret names without values", async () => {
+    const api = createCloudflareApi({
+      apiToken: "secret-token",
+      fetch: async (input, init) => {
+        const pathname = new URL(String(input)).pathname;
+        const result =
+          init?.method === "PUT"
+            ? { id: "domain-1", hostname: "go.example.com", service: "shortflare-redirect" }
+            : pathname.endsWith("/workers/subdomain")
+              ? { subdomain: "owner" }
+              : pathname.endsWith("/workers/domains")
+                ? [{ id: "domain-1", hostname: "go.example.com", service: "shortflare-redirect" }]
+                : [{ name: "ANALYTICS_HMAC_KEY", type: "secret_text" }];
+        return Response.json({ success: true, errors: [], messages: [], result });
+      },
+    });
+
+    await expect(api.getWorkersSubdomain("account-1")).resolves.toEqual({
+      ok: true,
+      registered: true,
+      subdomain: "owner",
+    });
+    await expect(api.listWorkerDomains("account-1")).resolves.toEqual({
+      ok: true,
+      domains: [{ id: "domain-1", hostname: "go.example.com", worker: "shortflare-redirect" }],
+    });
+    await expect(api.listWorkerSecretNames("account-1", "shortflare-redirect")).resolves.toEqual({
+      ok: true,
+      names: ["ANALYTICS_HMAC_KEY"],
+    });
+    await expect(
+      api.attachWorkerDomain("account-1", "go.example.com", "shortflare-redirect"),
+    ).resolves.toEqual({
+      ok: true,
+      domain: { id: "domain-1", hostname: "go.example.com", worker: "shortflare-redirect" },
+    });
+  });
+
   it("returns a stable error without exposing credentials or raw responses", async () => {
     const api = createCloudflareApi({
       apiToken: "secret-token",
