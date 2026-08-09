@@ -36,6 +36,11 @@ describe("Deployment Reconciliation plan", () => {
           { kind: "write-deployment-marker" },
           { kind: "create-queue", resource: "shortflare-events-dlq", role: "dead-letter" },
           { kind: "create-queue", resource: "shortflare-events", role: "primary" },
+          {
+            kind: "configure-domains",
+            redirectDomain: "go.example.com",
+            management: { kind: "workers-dev" },
+          },
           { kind: "configure-analytics-secret" },
           { kind: "upload-worker", worker: "management" },
           { kind: "activate-worker", worker: "management" },
@@ -282,8 +287,55 @@ describe("Deployment Reconciliation plan", () => {
         targetRelease: "1.0.0",
         destructive: false,
         actions: [],
+        digest: expect.stringMatching(/^[0-9a-f]{64}$/),
       },
     });
+  });
+
+  it("binds approval to the exact effective domain plan", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const observed = {
+      kind: "absent" as const,
+      accountId: "account-1",
+      workersDevRegistered: true,
+      collisions: [],
+    };
+    const first = createDeploymentPlan({
+      target: parsed.value,
+      observed,
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+    const repeated = createDeploymentPlan({
+      target: parsed.value,
+      observed,
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+    const changedDomain = createDeploymentPlan({
+      target: parsed.value,
+      observed,
+      requested: {
+        redirectDomain: "links.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(first.ok && repeated.ok && changedDomain.ok).toBe(true);
+    if (!first.ok || !repeated.ok || !changedDomain.ok) {
+      throw new Error("fresh plans must be available");
+    }
+    expect(first.plan.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(repeated.plan.digest).toBe(first.plan.digest);
+    expect(changedDomain.plan.digest).not.toBe(first.plan.digest);
   });
 });
 

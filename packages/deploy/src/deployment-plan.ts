@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { ReleaseManifest } from "./release-manifest";
 
 export type FreshAccountState = Readonly<{
@@ -39,6 +41,13 @@ export type DeploymentAction =
       resource: "shortflare-events" | "shortflare-events-dlq";
       role: "primary" | "dead-letter";
     }>
+  | Readonly<{
+      kind: "configure-domains";
+      redirectDomain: string;
+      management:
+        | Readonly<{ kind: "workers-dev" }>
+        | Readonly<{ kind: "custom-domain"; domain: string }>;
+    }>
   | Readonly<{ kind: "configure-analytics-secret" }>
   | Readonly<{ kind: "upload-worker"; worker: "management" | "redirect" }>
   | Readonly<{ kind: "activate-worker"; worker: "management" | "redirect" }>
@@ -56,7 +65,10 @@ export type DeploymentPlan = Readonly<{
   targetRelease: string;
   destructive: boolean;
   actions: readonly DeploymentAction[];
+  digest: string;
 }>;
+
+type UnsignedDeploymentPlan = Omit<DeploymentPlan, "digest">;
 
 export type CreateDeploymentPlanResult =
   | Readonly<{
@@ -142,20 +154,20 @@ export function createDeploymentPlan(
     ) {
       return {
         ok: true,
-        plan: {
+        plan: finalizePlan({
           operation: "noop",
           accountId: input.observed.accountId,
           sourceRelease: input.observed.coherentRelease,
           targetRelease: input.target.release,
           destructive: false,
           actions: [],
-        },
+        }),
       };
     }
 
     return {
       ok: true,
-      plan: {
+      plan: finalizePlan({
         operation: "upgrade",
         accountId: input.observed.accountId,
         sourceRelease: input.observed.coherentRelease,
@@ -180,7 +192,7 @@ export function createDeploymentPlan(
           { kind: "verify-worker", worker: "redirect" },
           { kind: "record-coherent-release", release: input.target.release },
         ],
-      },
+      }),
     };
   }
 
@@ -203,7 +215,7 @@ export function createDeploymentPlan(
 
   return {
     ok: true,
-    plan: {
+    plan: finalizePlan({
       operation: "install",
       accountId: input.observed.accountId,
       sourceRelease: "fresh",
@@ -222,6 +234,14 @@ export function createDeploymentPlan(
           resource: "shortflare-events",
           role: "primary",
         },
+        {
+          kind: "configure-domains",
+          redirectDomain: input.requested.redirectDomain,
+          management:
+            input.requested.managementDomain === undefined
+              ? { kind: "workers-dev" }
+              : { kind: "custom-domain", domain: input.requested.managementDomain },
+        },
         { kind: "configure-analytics-secret" },
         { kind: "upload-worker", worker: "management" },
         { kind: "activate-worker", worker: "management" },
@@ -235,6 +255,12 @@ export function createDeploymentPlan(
           administratorEmail: input.requested.administratorEmail,
         },
       ],
-    },
+    }),
   };
+}
+
+function finalizePlan(plan: UnsignedDeploymentPlan): DeploymentPlan {
+  // Approval covers the exact ordered actions while secret material remains outside the plan.
+  const digest = createHash("sha256").update(JSON.stringify(plan)).digest("hex");
+  return { ...plan, digest };
 }
