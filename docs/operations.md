@@ -116,10 +116,23 @@ before every production migration or upgrade; a weekly encrypted off-account
 export is recommended. Shortflare does not add R2 or an external backup service
 in the MVP, so it does not promise a fixed RPO or RTO.
 
-Verify a portable export by importing it into a new local D1 database, applying
-all pending migrations, and checking the singleton Instance, an Active
-Administrator, Links and Destination Versions, Audit Events, and analytics
-rollups through their module or HTTP interfaces.
+The deployment CLI stores migration exports under the platform-standard
+Shortflare user data directory by default, grouped by Cloudflare account, with
+user-only file permissions. Each filename identifies the UTC export time and
+source and target Shortflare Releases. `--backup-dir` selects another location,
+including an encrypted external store. Export failure stops deployment before
+the first production migration. The CLI records the D1 bookmark, file path, and
+SHA-256 digest in the Deployment Attempt without copying database contents, and
+never deletes an export automatically.
+
+Before changing production D1, the deployment CLI verifies the portable export
+by importing it into a new isolated local D1 database. It checks the Deployment
+Marker, singleton Instance, an Active Administrator, Links and Destination
+Versions, Audit Events, and analytics rollups against the source schema, applies
+all target migrations locally, and checks the target invariants again. Any
+import, migration, or invariant failure stops deployment. The temporary local
+database is removed after verification; the SQL export remains. The MVP does
+not provide an option to skip this gate.
 
 ## Restore
 
