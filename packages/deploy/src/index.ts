@@ -21,6 +21,7 @@ export type {
   CloudflareQueue,
   D1Database,
   WorkerDomain,
+  WorkerScript,
 } from "./cloudflare-api.js";
 export {
   createD1DeploymentJournal,
@@ -66,4 +67,5 @@ export type {
 export { createWranglerAdapter, WranglerCommandError } from "./wrangler-adapter.js";
 export { createNodeWranglerRun } from "./node-wrangler-runner.js";
 export { createProductionApplication } from "./production-application.js";
+export { createRecoveryPlan } from "./recovery-plan.js";
 export type { WranglerAdapter, WranglerRun } from "./wrangler-adapter.js";

@@ -85,6 +85,8 @@ describe("Cloudflare REST control-plane adapter", () => {
           id: "queue-1",
           name: "shortflare-events",
           settings: { deliveryDelay: 5, deliveryPaused: false, messageRetentionPeriod: 3600 },
+          producers: [],
+          consumers: [],
         },
         86_400,
       ),
@@ -165,6 +167,69 @@ describe("Cloudflare REST control-plane adapter", () => {
       ok: true,
       domain: { id: "domain-1", hostname: "go.example.com", worker: "shortflare-redirect" },
     });
+  });
+
+  it("lists Worker scripts and deletes an exact custom-domain resource", async () => {
+    const requests: Array<{ pathname: string; method: string }> = [];
+    const api = createCloudflareApi({
+      apiToken: "secret-token",
+      fetch: async (input, init) => {
+        const pathname = new URL(String(input)).pathname;
+        requests.push({ pathname, method: init?.method ?? "GET" });
+        return Response.json({
+          success: true,
+          errors: [],
+          messages: [],
+          result: init?.method === "DELETE" ? null : [{ id: "shortflare-management" }],
+        });
+      },
+    });
+
+    await expect(api.listWorkerScripts("account-1")).resolves.toEqual({
+      ok: true,
+      scripts: [{ name: "shortflare-management" }],
+    });
+    await expect(api.deleteWorkerDomain("account-1", "domain-1")).resolves.toEqual({
+      ok: true,
+    });
+    await expect(api.deleteQueueConsumer("account-1", "queue-1", "consumer-1")).resolves.toEqual({
+      ok: true,
+    });
+    expect(requests).toEqual([
+      { pathname: "/client/v4/accounts/account-1/workers/scripts", method: "GET" },
+      { pathname: "/client/v4/accounts/account-1/workers/domains/domain-1", method: "DELETE" },
+      {
+        pathname: "/client/v4/accounts/account-1/queues/queue-1/consumers/consumer-1",
+        method: "DELETE",
+      },
+    ]);
+  });
+
+  it("reads active Worker versions and resource bindings", async () => {
+    const api = createCloudflareApi({
+      apiToken: "secret-token",
+      fetch: async (input) => {
+        const pathname = new URL(String(input)).pathname;
+        const result = pathname.endsWith("/deployments")
+          ? { deployments: [{ versions: [{ percentage: 100, version_id: "version-1" }] }] }
+          : [
+              { name: "DB", type: "d1", database_id: "database-1" },
+              { name: "ANALYTICS_QUEUE", type: "queue", queue_name: "shortflare-events" },
+            ];
+        return Response.json({ success: true, errors: [], messages: [], result });
+      },
+    });
+
+    await expect(api.listWorkerBindings("account-1", "shortflare-redirect")).resolves.toEqual({
+      ok: true,
+      bindings: [
+        { name: "DB", type: "d1", databaseId: "database-1" },
+        { name: "ANALYTICS_QUEUE", type: "queue", queueName: "shortflare-events" },
+      ],
+    });
+    await expect(api.listActiveWorkerVersions("account-1", "shortflare-redirect")).resolves.toEqual(
+      { ok: true, versionIds: ["version-1"] },
+    );
   });
 
   it("returns a stable error without exposing credentials or raw responses", async () => {

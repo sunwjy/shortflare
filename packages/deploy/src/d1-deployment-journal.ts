@@ -36,15 +36,29 @@ export function createD1DeploymentJournal(
       const existingRows = await input.query(
         `SELECT id, completed_actions AS completedActions
          FROM deployment_attempts
-         WHERE plan_digest = ? AND status IN ('running', 'failed')
+         WHERE plan_digest = ? AND status = 'running'
          ORDER BY updated_at DESC LIMIT 1`,
         [plan.digest],
       );
       const existing = attemptRowSchema.safeParse(existingRows[0]);
       const attemptId = existing.success ? existing.data.id : input.randomId();
-      const completedActionIndexes = existing.success
-        ? parseCompletedActions(existing.data.completedActions)
-        : [];
+      const sealedRows = existing.success
+        ? []
+        : await input.query(
+            `SELECT id, completed_actions AS completedActions
+             FROM deployment_attempts
+             WHERE plan_digest = ? AND status = 'failed'
+             ORDER BY updated_at DESC LIMIT 1`,
+            [plan.digest],
+          );
+      const sealed = attemptRowSchema.safeParse(sealedRows[0]);
+      const completedActionIndexes = parseCompletedActions(
+        existing.success
+          ? existing.data.completedActions
+          : sealed.success
+            ? sealed.data.completedActions
+            : "[]",
+      );
 
       if (existing.success) {
         await input.query(
@@ -58,12 +72,13 @@ export function createD1DeploymentJournal(
           `INSERT INTO deployment_attempts
              (id, plan_digest, source_release, target_release, status,
               completed_actions, started_at, updated_at)
-           VALUES (?, ?, ?, ?, 'running', '[]', ?, ?)`,
+           VALUES (?, ?, ?, ?, 'running', ?, ?, ?)`,
           [
             attemptId,
             plan.digest,
             plan.sourceRelease,
             plan.targetRelease,
+            JSON.stringify(completedActionIndexes),
             String(now),
             String(now),
           ],

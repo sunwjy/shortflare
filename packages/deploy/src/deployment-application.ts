@@ -23,7 +23,10 @@ type ApplicationExecutor = DeploymentActionExecutor &
 export function createDeploymentApplication(
   input: Readonly<{
     manifest: ReleaseManifest;
-    observe(accountId: string): Promise<ObservedDeploymentState>;
+    observe(
+      accountId: string,
+      domains?: Readonly<{ redirectDomain: string; managementDomain?: string }>,
+    ): Promise<ObservedDeploymentState>;
     createExecutor(
       observed: ObservedDeploymentState,
       request: Readonly<{
@@ -55,7 +58,12 @@ export function createDeploymentApplication(
     async deploy(command) {
       const required = validateDeployCommand(command);
       if (!required.ok) return required.result;
-      const observed = await input.observe(required.accountId);
+      const observed = await input.observe(required.accountId, {
+        redirectDomain: required.redirectDomain,
+        ...(command.managementDomain === undefined
+          ? {}
+          : { managementDomain: command.managementDomain }),
+      });
       const needsAdministratorEmail =
         observed.kind === "absent" ||
         observed.coherentRelease === "fresh" ||
@@ -218,7 +226,9 @@ async function applyBootstrapAction(
   | Readonly<{ ok: true; completedActionIndexes: readonly number[] }>
   | Readonly<{ ok: false; result: CliApplicationResult }>
 > {
-  if (index >= 3) return { ok: true, completedActionIndexes: completed };
+  // D1 and its immutable marker bootstrap identity; the marker action also creates the
+  // Deployment Control journal so every subsequent effect, including migrations, is leased.
+  if (index >= 2) return { ok: true, completedActionIndexes: completed };
   const action = plan.actions[index];
   if (action === undefined) {
     return {

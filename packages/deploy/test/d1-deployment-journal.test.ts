@@ -7,14 +7,15 @@ import {
 import type { DeploymentPlan } from "../src/deployment-plan";
 
 describe("D1 Deployment Attempt journal", () => {
-  it("resumes completed actions and acquires a monotonically fenced lease", async () => {
+  it("copies progress into a new attempt without reopening a sealed failure", async () => {
     const calls: string[] = [];
     const journal = createD1DeploymentJournal({
       now: () => new Date(1_000),
       randomId: () => "new-attempt",
       query: async (sql) => {
         calls.push(sql);
-        if (sql.includes("FROM deployment_attempts")) {
+        if (sql.includes("status = 'running'")) return [];
+        if (sql.includes("status = 'failed'")) {
           return [{ id: "attempt-1", completedActions: "[0,2]" }];
         }
         if (sql.includes("RETURNING fencing_token")) return [{ fencingToken: 4 }];
@@ -23,11 +24,14 @@ describe("D1 Deployment Attempt journal", () => {
     });
 
     await expect(journal.begin(plan())).resolves.toEqual({
-      attemptId: "attempt-1",
+      attemptId: "new-attempt",
       completedActionIndexes: [0, 2],
       fencingToken: 4,
     });
     expect(calls.some((sql) => sql.includes("fencing_token + 1"))).toBe(true);
+    expect(
+      calls.some((sql) => sql.includes("UPDATE deployment_attempts\n           SET status")),
+    ).toBe(false);
   });
 
   it("rejects an active competing lease", async () => {

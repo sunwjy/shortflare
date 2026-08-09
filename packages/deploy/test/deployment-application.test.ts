@@ -56,11 +56,11 @@ describe("Deployment application", () => {
     expect(journalDatabaseId).toBe("database-1");
     expect(applied.slice(0, 3)).toEqual([
       "create-d1",
-      "apply-migrations",
       "write-deployment-marker",
+      "apply-migrations",
     ]);
     expect(applied.filter((stage) => stage === "create-d1")).toHaveLength(1);
-    expect(completed[0]).toBe(3);
+    expect(completed[0]).toBe(2);
   });
 
   it("returns the exact dry-run plan without creating mutation adapters", async () => {

@@ -21,8 +21,23 @@ export type CloudflareQueue = Readonly<{
     deliveryPaused: boolean;
     messageRetentionPeriod: number;
   }>;
+  producers: readonly Readonly<{ script: string; type: string }>[];
+  consumers: readonly Readonly<{
+    id: string;
+    scriptName: string;
+    type: string;
+    deadLetterQueue: string;
+    maxRetries?: number;
+  }>[];
 }>;
 export type WorkerDomain = Readonly<{ id: string; hostname: string; worker: string }>;
+export type WorkerScript = Readonly<{ name: string }>;
+export type WorkerBinding = Readonly<{
+  name: string;
+  type: string;
+  databaseId?: string;
+  queueName?: string;
+}>;
 
 export type CloudflareApi = Readonly<{
   listD1Databases(
@@ -67,10 +82,25 @@ export type CloudflareApi = Readonly<{
     hostname: string,
     workerName: string,
   ): Promise<CloudflareApiFailure | Readonly<{ ok: true; domain: WorkerDomain }>>;
+  deleteWorkerDomain(
+    accountId: string,
+    domainId: string,
+  ): Promise<CloudflareApiFailure | Readonly<{ ok: true }>>;
   listWorkerSecretNames(
     accountId: string,
     workerName: string,
   ): Promise<CloudflareApiFailure | Readonly<{ ok: true; names: readonly string[] }>>;
+  listWorkerScripts(
+    accountId: string,
+  ): Promise<CloudflareApiFailure | Readonly<{ ok: true; scripts: readonly WorkerScript[] }>>;
+  listWorkerBindings(
+    accountId: string,
+    workerName: string,
+  ): Promise<CloudflareApiFailure | Readonly<{ ok: true; bindings: readonly WorkerBinding[] }>>;
+  listActiveWorkerVersions(
+    accountId: string,
+    workerName: string,
+  ): Promise<CloudflareApiFailure | Readonly<{ ok: true; versionIds: readonly string[] }>>;
   listQueues(
     accountId: string,
   ): Promise<CloudflareApiFailure | Readonly<{ ok: true; queues: readonly CloudflareQueue[] }>>;
@@ -84,6 +114,11 @@ export type CloudflareApi = Readonly<{
     queue: CloudflareQueue,
     messageRetentionPeriod: number,
   ): Promise<CloudflareApiFailure | Readonly<{ ok: true; queue: CloudflareQueue }>>;
+  deleteQueueConsumer(
+    accountId: string,
+    queueId: string,
+    consumerId: string,
+  ): Promise<CloudflareApiFailure | Readonly<{ ok: true }>>;
 }>;
 
 const d1Schema = z.looseObject({ uuid: z.string().min(1), name: z.string().min(1) });
@@ -95,6 +130,20 @@ const queueSchema = z.looseObject({
     delivery_paused: z.boolean(),
     message_retention_period: z.number(),
   }),
+  producers: z
+    .array(z.looseObject({ script: z.string().min(1), type: z.string().min(1) }))
+    .optional(),
+  consumers: z
+    .array(
+      z.looseObject({
+        consumer_id: z.string().min(1),
+        script_name: z.string().min(1),
+        type: z.string().min(1),
+        dead_letter_queue: z.string(),
+        settings: z.looseObject({ max_retries: z.number().optional() }).optional(),
+      }),
+    )
+    .optional(),
 });
 const d1QuerySchema = z.looseObject({
   success: z.literal(true),
@@ -111,6 +160,20 @@ const workerDomainSchema = z.looseObject({
   service: z.string().min(1),
 });
 const workerSecretSchema = z.looseObject({ name: z.string().min(1), type: z.string() });
+const workerScriptSchema = z.looseObject({ id: z.string().min(1) });
+const workerBindingSchema = z.looseObject({
+  name: z.string().min(1),
+  type: z.string().min(1),
+  database_id: z.string().optional(),
+  queue_name: z.string().optional(),
+});
+const workerDeploymentsSchema = z.looseObject({
+  deployments: z.array(
+    z.looseObject({
+      versions: z.array(z.looseObject({ version_id: z.string().min(1) })),
+    }),
+  ),
+});
 
 export function createCloudflareApi(
   input: Readonly<{
@@ -123,7 +186,7 @@ export function createCloudflareApi(
   const baseUrl = input.baseUrl ?? "https://api.cloudflare.com/client/v4";
 
   async function request<Result>(
-    method: "GET" | "POST" | "PUT",
+    method: "DELETE" | "GET" | "POST" | "PUT",
     resourcePath: string,
     resultSchema: z.ZodType<Result>,
     body?: unknown,
@@ -276,6 +339,15 @@ export function createCloudflareApi(
       };
     },
 
+    async deleteWorkerDomain(accountId, domainId) {
+      const response = await request(
+        "DELETE",
+        `/accounts/${encodeURIComponent(accountId)}/workers/domains/${encodeURIComponent(domainId)}`,
+        z.null(),
+      );
+      return response.ok ? { ok: true } : response;
+    },
+
     async listWorkerSecretNames(accountId, workerName) {
       const response = await request(
         "GET",
@@ -284,6 +356,48 @@ export function createCloudflareApi(
       );
       if (!response.ok) return response.status === 404 ? { ok: true, names: [] } : response;
       return { ok: true, names: response.result.map((secret) => secret.name) };
+    },
+
+    async listWorkerScripts(accountId) {
+      const response = await request(
+        "GET",
+        `/accounts/${encodeURIComponent(accountId)}/workers/scripts`,
+        z.array(workerScriptSchema),
+      );
+      if (!response.ok) return response;
+      return { ok: true, scripts: response.result.map((script) => ({ name: script.id })) };
+    },
+
+    async listWorkerBindings(accountId, workerName) {
+      const response = await request(
+        "GET",
+        `/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}/bindings`,
+        z.array(workerBindingSchema),
+      );
+      if (!response.ok) return response.status === 404 ? { ok: true, bindings: [] } : response;
+      return {
+        ok: true,
+        bindings: response.result.map((binding) => ({
+          name: binding.name,
+          type: binding.type,
+          ...(binding.database_id === undefined ? {} : { databaseId: binding.database_id }),
+          ...(binding.queue_name === undefined ? {} : { queueName: binding.queue_name }),
+        })),
+      };
+    },
+
+    async listActiveWorkerVersions(accountId, workerName) {
+      const response = await request(
+        "GET",
+        `/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}/deployments`,
+        workerDeploymentsSchema,
+      );
+      if (!response.ok) return response.status === 404 ? { ok: true, versionIds: [] } : response;
+      return {
+        ok: true,
+        versionIds:
+          response.result.deployments[0]?.versions.map((version) => version.version_id) ?? [],
+      };
     },
 
     async listQueues(accountId) {
@@ -327,6 +441,15 @@ export function createCloudflareApi(
       if (!response.ok) return response;
       return { ok: true, queue: toQueue(response.result) };
     },
+
+    async deleteQueueConsumer(accountId, queueId, consumerId) {
+      const response = await request(
+        "DELETE",
+        `/accounts/${encodeURIComponent(accountId)}/queues/${encodeURIComponent(queueId)}/consumers/${encodeURIComponent(consumerId)}`,
+        z.null(),
+      );
+      return response.ok ? { ok: true } : response;
+    },
   };
 }
 
@@ -339,6 +462,19 @@ function toQueue(queue: z.infer<typeof queueSchema>): CloudflareQueue {
       deliveryPaused: queue.settings.delivery_paused,
       messageRetentionPeriod: queue.settings.message_retention_period,
     },
+    producers: (queue.producers ?? []).map((producer) => ({
+      script: producer.script,
+      type: producer.type,
+    })),
+    consumers: (queue.consumers ?? []).map((consumer) => ({
+      id: consumer.consumer_id,
+      scriptName: consumer.script_name,
+      type: consumer.type,
+      deadLetterQueue: consumer.dead_letter_queue,
+      ...(consumer.settings?.max_retries === undefined
+        ? {}
+        : { maxRetries: consumer.settings.max_retries }),
+    })),
   };
 }
 

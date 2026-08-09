@@ -91,30 +91,36 @@ npx shortflare@latest diagnose --account-id account-id
 npx shortflare@latest diagnose --json --account-id account-id
 ```
 
-Recovery is always a named action and requires `--yes` after diagnosis:
+Recovery is always a named action. The first invocation is read-only and prints
+the concrete plan digest. Review it, then repeat the exact command with
+`--approve-digest <digest>`; changed live state produces a different digest and
+invalidates the approval:
 
 ```sh
-# Delete only a D1 or Queue that diagnosis reported as an orphan.
+# Delete only a resource that diagnosis reported as an orphan.
 npx shortflare@latest recover orphan-resources \
-  --account-id account-id --resource primary-queue --yes
+  --account-id account-id --resource management-worker
+# Repeat with: --approve-digest <digest>
 
 # Rotate a lost Setup Token while setup is still eligible.
 npx shortflare@latest recover setup-token \
-  --account-id account-id --administrator-email owner@example.com --yes
+  --account-id account-id --administrator-email owner@example.com
 
 # Restore a known analytics key from stdin, or omit --secret-stdin to rotate.
 printf '%s' "$ANALYTICS_KEY" | npx shortflare@latest recover analytics-secret \
-  --account-id account-id --secret-stdin --yes
+  --account-id account-id --secret-stdin --approve-digest <digest>
 
 # Activate a previously verified Worker version tag.
 npx shortflare@latest recover worker-rollback \
   --account-id account-id --worker management \
-  --version-tag 1.2.3-management --yes
+  --version-tag 1.2.3-management --approve-digest <digest>
 ```
 
 For Setup Token automation, add `--json --secret-stdin` and pipe the chosen
-token. Secret values never appear in JSON. Queue cleanup may fail while the
-Management Worker still owns its consumer; remove the consumer Worker before
-the primary Queue, then the dead-letter Queue and D1.
+token. Secret values never appear in JSON. For orphan cleanup, detach each
+reported `domain:<hostname>`, remove each reported
+`consumer:shortflare-events:<consumer-id>`, then remove Management, Redirect,
+the primary Queue, the dead-letter Queue, and D1. The CLI
+refuses the primary Queue or D1 when an earlier diagnosed dependency remains.
 
 Uninstall and broad resource cleanup are intentionally outside the command.

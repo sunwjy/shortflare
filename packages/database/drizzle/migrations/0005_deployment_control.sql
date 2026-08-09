@@ -15,7 +15,7 @@ CREATE TABLE `coherent_release` (
 	CONSTRAINT "coherent_release_recorded_at_check" CHECK(typeof("coherent_release"."recorded_at") = 'integer' AND "coherent_release"."recorded_at" >= 0)
 );
 --> statement-breakpoint
-CREATE TABLE `deployment_attempts` (
+CREATE TABLE IF NOT EXISTS `deployment_attempts` (
 	`id` text PRIMARY KEY NOT NULL,
 	`plan_digest` text NOT NULL,
 	`source_release` text NOT NULL,
@@ -39,8 +39,8 @@ CREATE TABLE `deployment_attempts` (
           OR ("deployment_attempts"."status" != 'failed' AND "deployment_attempts"."failure_kind" IS NULL AND "deployment_attempts"."failed_stage" IS NULL))
 );
 --> statement-breakpoint
-CREATE INDEX `deployment_attempts_status_idx` ON `deployment_attempts` (`status`,`updated_at`);--> statement-breakpoint
-CREATE TABLE `deployment_lease` (
+CREATE INDEX IF NOT EXISTS `deployment_attempts_status_idx` ON `deployment_attempts` (`status`,`updated_at`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `deployment_lease` (
 	`singleton_key` integer PRIMARY KEY NOT NULL,
 	`attempt_id` text NOT NULL,
 	`expires_at` integer NOT NULL,
@@ -51,7 +51,7 @@ CREATE TABLE `deployment_lease` (
 	CONSTRAINT "deployment_lease_fencing_token_check" CHECK(typeof("deployment_lease"."fencing_token") = 'integer' AND "deployment_lease"."fencing_token" > 0)
 );
 --> statement-breakpoint
-CREATE TABLE `deployment_marker` (
+CREATE TABLE IF NOT EXISTS `deployment_marker` (
 	`singleton_key` integer PRIMARY KEY NOT NULL,
 	`instance_id` text NOT NULL,
 	`installation_release` text NOT NULL,
@@ -62,7 +62,7 @@ CREATE TABLE `deployment_marker` (
 	CONSTRAINT "deployment_marker_created_at_check" CHECK(typeof("deployment_marker"."created_at") = 'integer' AND "deployment_marker"."created_at" >= 0)
 );
 --> statement-breakpoint
-CREATE TRIGGER `deployment_marker_immutable`
+CREATE TRIGGER IF NOT EXISTS `deployment_marker_immutable`
 BEFORE UPDATE ON `deployment_marker`
 BEGIN
 	SELECT RAISE(ABORT, 'deployment marker is immutable');

@@ -43,6 +43,13 @@
       "when": 1786273626175,
       "tag": "0005_deployment_control",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786278190315,
+      "tag": "0006_wandering_hydra",
+      "breakpoints": true
     }
   ]
 }

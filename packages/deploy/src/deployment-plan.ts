@@ -63,7 +63,12 @@ export type DeploymentAction =
   | Readonly<{ kind: "verify-backup" }>
   | Readonly<{ kind: "apply-migrations"; migrations: readonly string[] }>
   | Readonly<{ kind: "record-coherent-release"; release: string }>
-  | Readonly<{ kind: "create-setup-handoff"; administratorEmail: string }>;
+  | Readonly<{ kind: "create-setup-handoff"; administratorEmail: string }>
+  | Readonly<{
+      kind: "recover";
+      action: "orphan-resources" | "setup-token" | "analytics-secret" | "worker-rollback";
+      target: string;
+    }>;
 
 export type DeploymentPlan = Readonly<{
   operation: "install" | "upgrade" | "noop";
@@ -138,6 +143,19 @@ export function createDeploymentPlan(
   }
   if (input.observed.kind === "present") {
     const targetsCurrentRelease = input.observed.coherentRelease === input.target.release;
+    if (
+      input.observed.schemaVersion > input.target.schema.version ||
+      (targetsCurrentRelease &&
+        input.observed.pendingMigrations.length === 0 &&
+        input.observed.schemaVersion !== input.target.schema.version)
+    ) {
+      return {
+        ok: false,
+        kind: "critical-drift",
+        fields: ["schema.version"],
+        recovery: "diagnose-and-recover",
+      };
+    }
     if (
       !targetsCurrentRelease &&
       !input.target.supportedSources.includes(input.observed.coherentRelease)
@@ -257,6 +275,7 @@ export function createDeploymentPlan(
           },
           { kind: "create-queue", resource: "shortflare-events", role: "primary" },
           { kind: "upload-worker", worker: "management" },
+          { kind: "upload-worker", worker: "redirect" },
           { kind: "activate-worker", worker: "management" },
           {
             kind: "configure-domain",
@@ -267,7 +286,6 @@ export function createDeploymentPlan(
                 : { kind: "custom-domain", hostname: input.requested.managementDomain },
           },
           { kind: "verify-worker", worker: "management" },
-          { kind: "upload-worker", worker: "redirect" },
           { kind: "activate-worker", worker: "redirect" },
           {
             kind: "configure-domain",
@@ -324,8 +342,8 @@ function installActions(
     ...(includeFoundation
       ? ([
           { kind: "create-d1", resource: "shortflare" },
-          { kind: "apply-migrations", migrations: input.target.schema.migrations },
           { kind: "write-deployment-marker" },
+          { kind: "apply-migrations", migrations: input.target.schema.migrations },
         ] as const)
       : input.observed.kind === "present" && input.observed.pendingMigrations.length > 0
         ? ([{ kind: "apply-migrations", migrations: input.observed.pendingMigrations }] as const)
@@ -340,8 +358,11 @@ function installActions(
       resource: "shortflare-events",
       role: "primary",
     },
-    { kind: "configure-analytics-secret" },
     { kind: "upload-worker", worker: "management" },
+    // A staged Redirect version creates the Worker before Wrangler can attach its first secret.
+    { kind: "upload-worker", worker: "redirect" },
+    { kind: "configure-analytics-secret" },
+    { kind: "upload-worker", worker: "redirect" },
     { kind: "activate-worker", worker: "management" },
     {
       kind: "configure-domain",
@@ -352,7 +373,6 @@ function installActions(
           : { kind: "custom-domain", hostname: input.requested.managementDomain },
     },
     { kind: "verify-worker", worker: "management" },
-    { kind: "upload-worker", worker: "redirect" },
     { kind: "activate-worker", worker: "redirect" },
     {
       kind: "configure-domain",

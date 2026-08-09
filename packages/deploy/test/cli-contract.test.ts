@@ -74,10 +74,23 @@ describe("Shortflare CLI contract", () => {
     });
     expect(parseCliArguments(["recover", "orphan-resources", "--json"])).toEqual({
       ok: false,
-      exitCode: 4,
+      exitCode: 2,
       error: {
-        kind: "approval-required",
-        message: "Recovery requires --yes after reviewing diagnosis",
+        kind: "invalid-input",
+        message: "orphan-resources requires --resource",
+      },
+    });
+    expect(
+      parseCliArguments(["recover", "orphan-resources", "--json", "--resource", "primary-queue"]),
+    ).toEqual({
+      ok: true,
+      command: {
+        kind: "recover",
+        mode: "json",
+        action: "orphan-resources",
+        approval: { kind: "none" },
+        secretFromStdin: false,
+        resource: "primary-queue",
       },
     });
     expect(
@@ -85,20 +98,20 @@ describe("Shortflare CLI contract", () => {
         "recover",
         "orphan-resources",
         "--json",
-        "--yes",
         "--resource",
         "primary-queue",
+        "--approve-digest",
+        "b".repeat(64),
       ]),
-    ).toEqual({
+    ).toMatchObject({
       ok: true,
-      command: {
-        kind: "recover",
-        mode: "json",
-        action: "orphan-resources",
-        approved: true,
-        secretFromStdin: false,
-        resource: "primary-queue",
-      },
+      command: { approval: { kind: "plan-digest", digest: "b".repeat(64) } },
+    });
+    expect(
+      parseCliArguments(["recover", "orphan-resources", "--resource", "primary-queue", "--yes"]),
+    ).toMatchObject({
+      ok: false,
+      error: { message: "Recovery approval must use --approve-digest, not --yes" },
     });
   });
 

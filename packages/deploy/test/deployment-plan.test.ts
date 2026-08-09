@@ -34,19 +34,20 @@ describe("Deployment Reconciliation plan", () => {
         destructive: false,
         actions: [
           { kind: "create-d1", resource: "shortflare" },
+          { kind: "write-deployment-marker" },
           {
             kind: "apply-migrations",
             migrations: ["0000_initial_schema.sql", "0005_deployment_control.sql"],
           },
-          { kind: "write-deployment-marker" },
           { kind: "create-queue", resource: "shortflare-events-dlq", role: "dead-letter" },
           { kind: "create-queue", resource: "shortflare-events", role: "primary" },
-          { kind: "configure-analytics-secret" },
           { kind: "upload-worker", worker: "management" },
+          { kind: "upload-worker", worker: "redirect" },
+          { kind: "configure-analytics-secret" },
+          { kind: "upload-worker", worker: "redirect" },
           { kind: "activate-worker", worker: "management" },
           { kind: "configure-domain", worker: "management", domain: { kind: "workers-dev" } },
           { kind: "verify-worker", worker: "management" },
-          { kind: "upload-worker", worker: "redirect" },
           { kind: "activate-worker", worker: "redirect" },
           {
             kind: "configure-domain",
@@ -158,10 +159,10 @@ describe("Deployment Reconciliation plan", () => {
           },
           { kind: "create-queue", resource: "shortflare-events", role: "primary" },
           { kind: "upload-worker", worker: "management" },
+          { kind: "upload-worker", worker: "redirect" },
           { kind: "activate-worker", worker: "management" },
           { kind: "configure-domain", worker: "management", domain: { kind: "workers-dev" } },
           { kind: "verify-worker", worker: "management" },
-          { kind: "upload-worker", worker: "redirect" },
           { kind: "activate-worker", worker: "redirect" },
           {
             kind: "configure-domain",
@@ -340,8 +341,8 @@ describe("Deployment Reconciliation plan", () => {
     expect(result.plan.actions.slice(0, 4)).toMatchObject([
       { kind: "create-queue", resource: "shortflare-events-dlq" },
       { kind: "create-queue", resource: "shortflare-events" },
-      { kind: "configure-analytics-secret" },
       { kind: "upload-worker", worker: "management" },
+      { kind: "upload-worker", worker: "redirect" },
     ]);
     expect(JSON.stringify(result)).not.toContain("create-d1");
     expect(JSON.stringify(result)).not.toContain("write-deployment-marker");

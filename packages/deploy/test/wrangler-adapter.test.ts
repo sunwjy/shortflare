@@ -8,7 +8,13 @@ describe("pinned Wrangler adapter", () => {
     const adapter = createWranglerAdapter({
       run: async (arguments_, options) => {
         calls.push({ arguments: arguments_, ...options });
-        return { exitCode: 0, stdout: "", stderr: "" };
+        return {
+          exitCode: 0,
+          stdout: arguments_.includes("list")
+            ? JSON.stringify([{ id: "management-version-id", tag: "1.0.0-management" }])
+            : "",
+          stderr: "",
+        };
       },
     });
 
@@ -39,6 +45,9 @@ describe("pinned Wrangler adapter", () => {
           "--tag",
           "1.0.0-management",
         ],
+      },
+      {
+        arguments: ["versions", "list", "--config", "/bundle/management/wrangler.json", "--json"],
       },
       {
         arguments: [

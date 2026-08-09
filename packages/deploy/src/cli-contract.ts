@@ -34,7 +34,7 @@ export type RecoverCommand = Readonly<{
   kind: "recover";
   mode: CliOutputMode;
   action: RecoveryAction;
-  approved: true;
+  approval: Readonly<{ kind: "none" }> | Readonly<{ kind: "plan-digest"; digest: string }>;
   accountId?: string;
   resource?: string;
   administratorEmail?: string;
@@ -90,8 +90,8 @@ function parseDeploy(arguments_: readonly string[]): ParseCliArgumentsResult {
     options: {
       ...commonOptions,
       yes: { type: "boolean" },
-      "dry-run": { type: "boolean" },
       "approve-digest": { type: "string" },
+      "dry-run": { type: "boolean" },
       "redirect-domain": { type: "string" },
       "management-domain": { type: "string" },
       "administrator-email": { type: "string" },
@@ -176,6 +176,7 @@ function parseRecover(arguments_: readonly string[]): ParseCliArgumentsResult {
     options: {
       ...commonOptions,
       yes: { type: "boolean" },
+      "approve-digest": { type: "string" },
       resource: { type: "string" },
       "administrator-email": { type: "string" },
       worker: { type: "string" },
@@ -190,15 +191,8 @@ function parseRecover(arguments_: readonly string[]): ParseCliArgumentsResult {
   if (!isRecoveryAction(action) || extraPositionals.length > 0) {
     return invalidInput(`Unknown recovery action '${action}'`);
   }
-  if (parsed.values.yes !== true) {
-    return {
-      ok: false,
-      exitCode: 4,
-      error: {
-        kind: "approval-required",
-        message: "Recovery requires --yes after reviewing diagnosis",
-      },
-    };
+  if (parsed.values.yes === true) {
+    return invalidInput("Recovery approval must use --approve-digest, not --yes");
   }
   const mode = parsed.values.json === true ? "json" : "human";
   if (action === "orphan-resources" && parsed.values.resource === undefined) {
@@ -224,7 +218,10 @@ function parseRecover(arguments_: readonly string[]): ParseCliArgumentsResult {
       kind: "recover",
       mode,
       action,
-      approved: true,
+      approval:
+        parsed.values["approve-digest"] === undefined
+          ? { kind: "none" }
+          : { kind: "plan-digest", digest: parsed.values["approve-digest"] },
       secretFromStdin: parsed.values["secret-stdin"] === true,
       ...optional("accountId", parsed.values["account-id"]),
       ...optional("resource", parsed.values.resource),

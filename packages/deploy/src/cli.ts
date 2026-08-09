@@ -67,6 +67,9 @@ function renderHumanResult(
     if (command === "deploy" && typeof result.plan === "object") {
       return `Shortflare deployment plan:\n${JSON.stringify(result.plan, null, 2)}`;
     }
+    if (command === "recover" && typeof result.plan === "object") {
+      return `Shortflare recovery plan:\n${JSON.stringify(result.plan, null, 2)}`;
+    }
     return typeof setupToken === "string"
       ? `Shortflare ${command} completed.\nOne-time setup token: ${setupToken}`
       : `Shortflare ${command} completed.`;

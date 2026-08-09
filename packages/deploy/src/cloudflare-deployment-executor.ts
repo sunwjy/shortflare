@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-import type { CloudflareApi, CloudflareApiFailure } from "./cloudflare-api.js";
+import type { CloudflareApi, CloudflareApiFailure, WorkerBinding } from "./cloudflare-api.js";
 import { writeD1Backup } from "./d1-backup.js";
 import type { DeploymentAction, DeploymentPlan } from "./deployment-plan.js";
 import type { DeploymentActionExecutor, DeploymentRecovery } from "./deployment-runner.js";
@@ -20,6 +20,12 @@ const setupEligibilitySchema = z.looseObject({
   setupCompletedAt: z.number().nullable(),
   activeAdministrators: z.number().int().nonnegative(),
 });
+const managementHealthSchema = z.strictObject({ status: z.literal("ok") });
+const activeLinkSchema = z.looseObject({
+  alias: z.string().min(1),
+  destination: z.url(),
+});
+const migrationRowSchema = z.looseObject({ name: z.string().min(1) });
 
 export type CloudflareDeploymentOutput = Readonly<{
   databaseId?: string;
@@ -154,10 +160,88 @@ export function createCloudflareDeploymentExecutor(
       case "write-deployment-marker":
         instanceId = input.randomId();
         await query(
+          `CREATE TABLE IF NOT EXISTS deployment_marker (
+             singleton_key INTEGER PRIMARY KEY NOT NULL,
+             instance_id TEXT NOT NULL,
+             installation_release TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             CONSTRAINT deployment_marker_singleton_key_check
+               CHECK(typeof(singleton_key) = 'integer' AND singleton_key = 1),
+             CONSTRAINT deployment_marker_instance_id_check
+               CHECK(length(instance_id) BETWEEN 1 AND 128),
+             CONSTRAINT deployment_marker_installation_release_check
+               CHECK(length(installation_release) BETWEEN 1 AND 128),
+             CONSTRAINT deployment_marker_created_at_check
+               CHECK(typeof(created_at) = 'integer' AND created_at >= 0)
+           )`,
+        );
+        await query(
+          `CREATE TRIGGER IF NOT EXISTS deployment_marker_immutable
+           BEFORE UPDATE ON deployment_marker
+           BEGIN
+             SELECT RAISE(ABORT, 'deployment marker is immutable');
+           END`,
+        );
+        await query(
           `INSERT INTO deployment_marker
              (singleton_key, instance_id, installation_release, created_at)
            VALUES (1, ?, ?, ?)`,
           [instanceId, plan.targetRelease, String(input.now().getTime())],
+        );
+        // The lease tables are bootstrapped immediately after identity so migrations are the
+        // first mutable Instance effect protected by a fenced Deployment Lease (ADR-0032).
+        await query(
+          `CREATE TABLE IF NOT EXISTS deployment_attempts (
+             id TEXT PRIMARY KEY NOT NULL,
+             plan_digest TEXT NOT NULL,
+             source_release TEXT NOT NULL,
+             target_release TEXT NOT NULL,
+             status TEXT NOT NULL,
+             completed_actions TEXT NOT NULL,
+             started_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             failure_kind TEXT,
+             failed_stage TEXT,
+             CONSTRAINT deployment_attempts_id_check CHECK(length(id) BETWEEN 1 AND 128),
+             CONSTRAINT deployment_attempts_plan_digest_check
+               CHECK(length(plan_digest) = 64 AND plan_digest NOT GLOB '*[^0-9a-f]*'),
+             CONSTRAINT deployment_attempts_source_release_check
+               CHECK(length(source_release) BETWEEN 1 AND 128),
+             CONSTRAINT deployment_attempts_target_release_check
+               CHECK(length(target_release) BETWEEN 1 AND 128),
+             CONSTRAINT deployment_attempts_status_check
+               CHECK(status IN ('running', 'failed', 'coherent')),
+             CONSTRAINT deployment_attempts_completed_actions_check
+               CHECK(json_valid(completed_actions) AND json_type(completed_actions) = 'array'),
+             CONSTRAINT deployment_attempts_started_at_check
+               CHECK(typeof(started_at) = 'integer' AND started_at >= 0),
+             CONSTRAINT deployment_attempts_updated_at_check
+               CHECK(typeof(updated_at) = 'integer' AND updated_at >= 0),
+             CONSTRAINT deployment_attempts_time_order_check CHECK(updated_at >= started_at),
+             CONSTRAINT deployment_attempts_failure_check
+               CHECK((status = 'failed' AND failure_kind IS NOT NULL AND failed_stage IS NOT NULL)
+                 OR (status != 'failed' AND failure_kind IS NULL AND failed_stage IS NULL))
+           )`,
+        );
+        await query(
+          `CREATE INDEX IF NOT EXISTS deployment_attempts_status_idx
+           ON deployment_attempts (status, updated_at)`,
+        );
+        await query(
+          `CREATE TABLE IF NOT EXISTS deployment_lease (
+             singleton_key INTEGER PRIMARY KEY NOT NULL,
+             attempt_id TEXT NOT NULL,
+             expires_at INTEGER NOT NULL,
+             fencing_token INTEGER NOT NULL,
+             FOREIGN KEY (attempt_id) REFERENCES deployment_attempts(id)
+               ON UPDATE NO ACTION ON DELETE RESTRICT,
+             CONSTRAINT deployment_lease_singleton_key_check
+               CHECK(typeof(singleton_key) = 'integer' AND singleton_key = 1),
+             CONSTRAINT deployment_lease_expires_at_check
+               CHECK(typeof(expires_at) = 'integer' AND expires_at >= 0),
+             CONSTRAINT deployment_lease_fencing_token_check
+               CHECK(typeof(fencing_token) = 'integer' AND fencing_token > 0)
+           )`,
         );
         return;
       case "create-queue":
@@ -205,6 +289,8 @@ export function createCloudflareDeploymentExecutor(
       case "create-setup-handoff":
         await createSetupHandoff(action.administratorEmail);
         return;
+      case "recover":
+        throw new Error("Recovery actions require the recovery executor");
     }
   }
 
@@ -263,19 +349,148 @@ export function createCloudflareDeploymentExecutor(
       if (!subdomain.registered) throw new Error("workers.dev subdomain is not registered");
       url = `https://${resourceNames.management}.${subdomain.subdomain}.workers.dev/api/internal/health`;
     }
-    await pollHealth(url, 30);
+    await pollHealth(url, 30, async (response) => {
+      if (!response.ok) return false;
+      if (worker === "redirect") return true;
+      const payload: unknown = await response.json().catch(() => undefined);
+      return managementHealthSchema.safeParse(payload).success;
+    });
+    if (worker === "redirect") await verifyActiveLink();
   }
 
-  async function pollHealth(url: string, attemptsRemaining: number): Promise<void> {
+  async function pollHealth(
+    url: string,
+    attemptsRemaining: number,
+    accepts: (response: Response) => Promise<boolean>,
+  ): Promise<void> {
     try {
       const response = await input.fetch(url);
-      if (response.ok) return;
+      if (await accepts(response)) return;
     } catch {
       // A newly activated Worker can take several seconds to become reachable.
     }
     if (attemptsRemaining <= 1) throw new Error("Worker health verification timed out");
     await input.delay(1_000);
-    await pollHealth(url, attemptsRemaining - 1);
+    await pollHealth(url, attemptsRemaining - 1, accepts);
+  }
+
+  async function verifyActiveLink(): Promise<void> {
+    const rows = await query(
+      `SELECT a.alias, d.destination
+       FROM links l
+       JOIN aliases a ON a.link_id = l.id
+       JOIN destination_versions d ON d.link_id = l.id
+       WHERE l.state = 'active'
+       ORDER BY d.version_number DESC LIMIT 1`,
+    );
+    const link = activeLinkSchema.safeParse(rows[0]);
+    if (!link.success) return;
+    const response = await input.fetch(`https://${input.redirectDomain}/${link.data.alias}`, {
+      method: "HEAD",
+      redirect: "manual",
+    });
+    if (response.status !== 302 || response.headers.get("location") !== link.data.destination) {
+      throw new Error("Active Link verification failed");
+    }
+  }
+
+  async function validateControlPlane(
+    managementVersionId: string,
+    redirectVersionId: string,
+  ): Promise<void> {
+    if (databaseId === undefined) throw new Error("D1 is not available");
+    const [
+      markerRows,
+      migrationRows,
+      queues,
+      secrets,
+      domains,
+      managementBindings,
+      redirectBindings,
+      managementVersions,
+      redirectVersions,
+    ] = await Promise.all([
+      query(`SELECT instance_id AS instanceId FROM deployment_marker WHERE singleton_key = 1`),
+      query(`SELECT name FROM d1_migrations ORDER BY id`),
+      input.api.listQueues(input.accountId),
+      input.api.listWorkerSecretNames(input.accountId, resourceNames.redirect),
+      input.api.listWorkerDomains(input.accountId),
+      input.api.listWorkerBindings(input.accountId, resourceNames.management),
+      input.api.listWorkerBindings(input.accountId, resourceNames.redirect),
+      input.api.listActiveWorkerVersions(input.accountId, resourceNames.management),
+      input.api.listActiveWorkerVersions(input.accountId, resourceNames.redirect),
+    ]);
+    const marker = z.looseObject({ instanceId: z.string().min(1) }).safeParse(markerRows[0]);
+    const applied = new Set(
+      migrationRows.flatMap((row) => {
+        const parsed = migrationRowSchema.safeParse(row);
+        return parsed.success ? [parsed.data.name] : [];
+      }),
+    );
+    if (
+      !marker.success ||
+      input.manifest.schema.migrations.some((migration) => !applied.has(migration)) ||
+      !queues.ok ||
+      !secrets.ok ||
+      !domains.ok ||
+      !managementBindings.ok ||
+      !redirectBindings.ok ||
+      !managementVersions.ok ||
+      !redirectVersions.ok
+    ) {
+      throw new Error("Control-plane verification failed");
+    }
+    for (const name of ["shortflare-events", "shortflare-events-dlq"]) {
+      const queue = queues.queues.find((candidate) => candidate.name === name);
+      if (queue?.settings.messageRetentionPeriod !== queueRetentionSeconds) {
+        throw new Error(`Queue '${name}' failed verification`);
+      }
+    }
+    const primaryQueue = queues.queues.find((candidate) => candidate.name === "shortflare-events");
+    if (
+      !primaryQueue?.producers.some(
+        (producer) => producer.type === "worker" && producer.script === resourceNames.redirect,
+      ) ||
+      !primaryQueue.consumers.some(
+        (consumer) =>
+          consumer.type === "worker" &&
+          consumer.scriptName === resourceNames.management &&
+          consumer.deadLetterQueue === "shortflare-events-dlq" &&
+          consumer.maxRetries === 3,
+      )
+    ) {
+      throw new Error("Queue producer or consumer failed verification");
+    }
+    if (
+      !bindingMatches(managementBindings.bindings, "DB", "d1", databaseId) ||
+      !bindingMatches(redirectBindings.bindings, "DB", "d1", databaseId) ||
+      !bindingMatches(redirectBindings.bindings, "ANALYTICS_QUEUE", "queue", "shortflare-events")
+    ) {
+      throw new Error("Worker bindings failed verification");
+    }
+    if (
+      !managementVersions.versionIds.includes(managementVersionId) ||
+      !redirectVersions.versionIds.includes(redirectVersionId)
+    ) {
+      throw new Error("Active Worker versions failed verification");
+    }
+    if (!secrets.names.includes("ANALYTICS_HMAC_KEY")) {
+      throw new Error("Analytics secret binding failed verification");
+    }
+    const redirectDomain = domains.domains.find(
+      (domain) => domain.hostname === input.redirectDomain,
+    );
+    if (redirectDomain?.worker !== resourceNames.redirect) {
+      throw new Error("Redirect Custom Domain failed verification");
+    }
+    if (input.managementDomain !== undefined) {
+      const managementDomain = domains.domains.find(
+        (domain) => domain.hostname === input.managementDomain,
+      );
+      if (managementDomain?.worker !== resourceNames.management) {
+        throw new Error("Management Custom Domain failed verification");
+      }
+    }
   }
 
   async function exportDatabase(plan: DeploymentPlan) {
@@ -309,24 +524,34 @@ export function createCloudflareDeploymentExecutor(
   }
 
   async function recordCoherentRelease(plan: DeploymentPlan) {
-    const tag = (worker: "management" | "redirect") => versionTag(plan, worker);
+    const resolved = await resolvedArtifacts();
+    const [managementVersionId, redirectVersionId] = await Promise.all([
+      input.wrangler.resolveVersionId(resolved.managementConfig, versionTag(plan, "management")),
+      input.wrangler.resolveVersionId(resolved.redirectConfig, versionTag(plan, "redirect")),
+    ]);
+    await validateControlPlane(managementVersionId, redirectVersionId);
     await query(
       `INSERT INTO coherent_release
          (singleton_key, release, schema_version, management_worker_version,
-          redirect_worker_version, manifest_sha256, recorded_at)
-       VALUES (1, ?, ?, ?, ?, ?, ?)
+          redirect_worker_version, management_artifact_sha256,
+          redirect_artifact_sha256, manifest_sha256, recorded_at)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(singleton_key) DO UPDATE SET
          release = excluded.release,
          schema_version = excluded.schema_version,
          management_worker_version = excluded.management_worker_version,
          redirect_worker_version = excluded.redirect_worker_version,
+         management_artifact_sha256 = excluded.management_artifact_sha256,
+         redirect_artifact_sha256 = excluded.redirect_artifact_sha256,
          manifest_sha256 = excluded.manifest_sha256,
          recorded_at = excluded.recorded_at`,
       [
         plan.targetRelease,
         String(input.manifest.schema.version),
-        tag("management"),
-        tag("redirect"),
+        managementVersionId,
+        redirectVersionId,
+        input.manifest.artifacts.management.sha256,
+        input.manifest.artifacts.redirect.sha256,
         plan.targetManifestDigest,
         String(input.now().getTime()),
       ],
@@ -373,6 +598,20 @@ export function createCloudflareDeploymentExecutor(
     );
     if (input.setupToken === undefined) setupToken = token;
   }
+}
+
+function bindingMatches(
+  bindings: readonly WorkerBinding[],
+  name: string,
+  type: "d1" | "queue",
+  resource: string,
+): boolean {
+  return bindings.some(
+    (binding) =>
+      binding.name === name &&
+      binding.type === type &&
+      (type === "d1" ? binding.databaseId === resource : binding.queueName === resource),
+  );
 }
 
 function workerName(worker: "management" | "redirect"): string {

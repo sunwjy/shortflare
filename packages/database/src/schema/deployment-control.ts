@@ -40,6 +40,9 @@ export const coherentRelease = sqliteTable(
     schemaVersion: integer("schema_version").notNull(),
     managementWorkerVersion: text("management_worker_version").notNull(),
     redirectWorkerVersion: text("redirect_worker_version").notNull(),
+    // Legacy coherent rows predate artifact identity. The next successful deploy backfills both.
+    managementArtifactSha256: text("management_artifact_sha256"),
+    redirectArtifactSha256: text("redirect_artifact_sha256"),
     manifestSha256: text("manifest_sha256").notNull(),
     recordedAt: integer("recorded_at", { mode: "timestamp_ms" }).notNull(),
   },
@@ -60,6 +63,14 @@ export const coherentRelease = sqliteTable(
     check(
       "coherent_release_redirect_worker_version_check",
       sql`length(${table.redirectWorkerVersion}) BETWEEN 1 AND 256`,
+    ),
+    check(
+      "coherent_release_management_artifact_sha256_check",
+      digestCheck(table.managementArtifactSha256),
+    ),
+    check(
+      "coherent_release_redirect_artifact_sha256_check",
+      digestCheck(table.redirectArtifactSha256),
     ),
     check("coherent_release_manifest_sha256_check", digestCheck(table.manifestSha256)),
     check("coherent_release_recorded_at_check", timestampCheck(table.recordedAt)),

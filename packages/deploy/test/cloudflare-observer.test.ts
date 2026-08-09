@@ -10,7 +10,16 @@ describe("Cloudflare deployment observer", () => {
         return [{ instanceId: "instance-1" }];
       }
       if (sql.includes("coherent_release")) {
-        return [{ release: "1.0.0", schemaVersion: 5 }];
+        return [
+          {
+            release: "1.0.0",
+            schemaVersion: 5,
+            managementWorkerVersion: "management-version-id",
+            redirectWorkerVersion: "redirect-version-id",
+            managementArtifactSha256: "a".repeat(64),
+            redirectArtifactSha256: "b".repeat(64),
+          },
+        ];
       }
       if (sql.includes("d1_migrations")) {
         return [{ name: "0005_deployment_control.sql" }];
@@ -57,7 +66,29 @@ function fakeApi(query: (sql: string) => Promise<readonly unknown[]>): Cloudflar
     attachWorkerDomain: async () => {
       throw new Error("not used");
     },
+    deleteWorkerDomain: async () => {
+      throw new Error("not used");
+    },
     listWorkerSecretNames: async () => ({ ok: true, names: ["ANALYTICS_HMAC_KEY"] }),
+    listWorkerScripts: async () => ({
+      ok: true,
+      scripts: [{ name: "shortflare-management" }, { name: "shortflare-redirect" }],
+    }),
+    listWorkerBindings: async (_account, worker) => ({
+      ok: true,
+      bindings: [
+        { name: "DB", type: "d1", databaseId: "database-1" },
+        ...(worker === "shortflare-redirect"
+          ? [{ name: "ANALYTICS_QUEUE", type: "queue", queueName: "shortflare-events" }]
+          : []),
+      ],
+    }),
+    listActiveWorkerVersions: async (_account, worker) => ({
+      ok: true,
+      versionIds: [
+        worker === "shortflare-management" ? "management-version-id" : "redirect-version-id",
+      ],
+    }),
     listQueues: async () => ({
       ok: true,
       queues: [queue("queue-1", "shortflare-events"), queue("queue-2", "shortflare-events-dlq")],
@@ -68,6 +99,9 @@ function fakeApi(query: (sql: string) => Promise<readonly unknown[]>): Cloudflar
     updateQueueRetention: async () => {
       throw new Error("not used");
     },
+    deleteQueueConsumer: async () => {
+      throw new Error("not used");
+    },
   };
 }
 
@@ -76,5 +110,19 @@ function queue(id: string, name: string) {
     id,
     name,
     settings: { deliveryDelay: 0, deliveryPaused: false, messageRetentionPeriod: 86_400 },
+    producers:
+      name === "shortflare-events" ? [{ type: "worker", script: "shortflare-redirect" }] : [],
+    consumers:
+      name === "shortflare-events"
+        ? [
+            {
+              id: "consumer-1",
+              type: "worker",
+              scriptName: "shortflare-management",
+              deadLetterQueue: "shortflare-events-dlq",
+              maxRetries: 3,
+            },
+          ]
+        : [],
   };
 }

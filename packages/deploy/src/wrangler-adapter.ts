@@ -24,7 +24,7 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
         configPath,
       ]);
     },
-    async uploadWorker(configPath: string, versionTag: string): Promise<void> {
+    async uploadWorker(configPath: string, versionTag: string): Promise<string> {
       await checkedRun([
         "versions",
         "upload",
@@ -35,6 +35,7 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
         "--tag",
         versionTag,
       ]);
+      return resolveVersionId(configPath, versionTag);
     },
     async activateWorker(configPath: string, versionTag: string): Promise<void> {
       await checkedRun([
@@ -106,7 +107,30 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
         throw new WranglerCommandError("D1 backup verification");
       }
     },
+    async resolveVersionId(configPath: string, versionTag: string): Promise<string> {
+      return resolveVersionId(configPath, versionTag);
+    },
+    async resolveVersionIdByName(workerName: string, versionTag: string): Promise<string> {
+      const listed = await checkedRun(["versions", "list", "--name", workerName, "--json"]);
+      return findVersionId(listed.stdout, versionTag);
+    },
   } as const;
+
+  async function resolveVersionId(configPath: string, versionTag: string): Promise<string> {
+    const listed = await checkedRun(["versions", "list", "--config", configPath, "--json"]);
+    return findVersionId(listed.stdout, versionTag);
+  }
+}
+
+function findVersionId(output: string, versionTag: string): string {
+  const parsed = z.array(workerVersionSchema).safeParse(JSON.parse(output));
+  if (!parsed.success) throw new WranglerCommandError("versions list");
+  const version = parsed.data.find(
+    (candidate) =>
+      candidate.tag === versionTag || candidate.annotations?.["workers/tag"] === versionTag,
+  );
+  if (version === undefined) throw new WranglerCommandError("version tag resolution");
+  return version.id;
 }
 
 const backupVerificationSchema = z.array(
@@ -115,6 +139,11 @@ const backupVerificationSchema = z.array(
     results: z.array(z.looseObject({ valid: z.number().int() })),
   }),
 );
+const workerVersionSchema = z.looseObject({
+  id: z.string().min(1),
+  tag: z.string().optional(),
+  annotations: z.record(z.string(), z.string()).optional(),
+});
 
 const backupInvariantSql = `SELECT CASE WHEN
   (SELECT COUNT(*) FROM deployment_marker) = 1 AND
