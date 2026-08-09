@@ -1,6 +1,7 @@
 import type { User, UserRole } from "../modules/identity";
 
 export type Capability =
+  | "view-audit-events"
   | "view-analytics"
   | "manage-links"
   | "delete-links"
@@ -10,6 +11,7 @@ export type Capability =
 
 const capabilitiesByRole: Readonly<Record<UserRole, ReadonlySet<Capability>>> = {
   administrator: new Set([
+    "view-audit-events",
     "view-analytics",
     "manage-links",
     "delete-links",

@@ -5,7 +5,7 @@ import { createUserRoutes } from "./user-routes";
 
 type IdentityHttpDependencies = Pick<
   ManagementDependencies,
-  "createIdentity" | "createRequestAuthentication" | "hasCapability"
+  "createIdentity" | "createRequestAuthentication" | "createRequestRateLimits" | "hasCapability"
 >;
 
 export function createIdentityHttpRoutes(dependencies: IdentityHttpDependencies) {

@@ -7,7 +7,11 @@ import { parseAnalyticsQuery } from "./query";
 
 type AnalyticsHttpDependencies = Pick<
   ManagementDependencies,
-  "createAnalytics" | "createLinks" | "createRequestAuthentication" | "hasCapability"
+  | "createAnalytics"
+  | "createLinks"
+  | "createRequestAuthentication"
+  | "createRequestRateLimits"
+  | "hasCapability"
 >;
 
 const presentAuthenticationFailure: Parameters<typeof createAuthenticationMiddleware>[1] = (

@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
-describe("initial D1 migration", () => {
+describe("fresh D1 migration", () => {
   it("creates exactly one Instance record", async () => {
     await expect(
       env.DB.prepare("INSERT INTO instances (singleton_key, created_at) VALUES (2, 0)").run(),

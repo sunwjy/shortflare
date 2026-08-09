@@ -297,8 +297,11 @@ but requires a detail refetch for current data.
    Suspected Bot Clicks; suspected bots have no unique metric.
 7. Raw events and Hourly Rollups expire 90 days after Click Time. Daily Rollups
    remain until Analytics Erasure or permanent Link deletion. Retention cleanup
-   is exposed by the module in this slice; its scheduled trigger belongs to the
-   operations baseline.
+   is exposed by the module and runs from the Management Worker's hourly Cron
+   Trigger. The default schedule is `0 * * * *` UTC and an Owner may change it
+   through deployment configuration. Cleanup uses the trigger's scheduled time,
+   is idempotent, and reports failures to the platform so a later invocation can
+   catch up; it does not create an Audit Event.
 8. Analytics Erasure removes all analytics for one Link or the Instance.
    Analytics Recalculation atomically replaces one Link's rollups and uniqueness
    records for one complete UTC date, and rejects dates whose raw events are no
@@ -435,7 +438,7 @@ larger interface.
 
 ### Management-only modules
 
-Identity, access control, audit browsing, and Instance settings remain inside
+Identity, access control, Audit Event browsing, and Instance settings remain inside
 `apps/management`. They have one runtime caller, so separate workspace packages
 or hypothetical external seams would add indirection without leverage. Identity
 owns Initial Setup, Sessions, Invitations, Users, Password Resets, and Operator
@@ -524,7 +527,7 @@ belong in the Drizzle schema, not this document.
 | Identity | initial setup and operator recovery handoffs, users, credentials, invitations, reset tokens, sessions | normalized email is unique; after setup, at least one active Administrator remains |
 | Links | links, destination versions, reserved aliases, tags | Alias is case-sensitive and unique; destination history is append-only |
 | Analytics | raw Click Events, uniqueness records, hourly/daily rollups, consumer checkpoints | Event ID is idempotent; raw and hourly retention is 90 days; daily rollups persist until erasure |
-| Audit | administrative mutation events | actor, action, subject ID, time, and non-sensitive metadata are retained |
+| Audit | administrative mutation events | actor, action, subject ID, time, and non-sensitive metadata are retained for the Instance lifetime |
 | Deployment | schema and application version metadata | both Workers must be compatible with the recorded schema version |
 
 Archiving keeps the Link's Alias, analytics, and change history. Restoring an
@@ -663,7 +666,19 @@ endpoint.
   reauthentication, failures, and no-ops are excluded. Metadata may identify
   prior and new roles or states but never a User Email, password, token, or
   Session identifier.
-- Authentication, invitation, reset, and management endpoints are rate-limited.
+- Audit Events are exposed through one Administrator-only, read-only collection
+  ordered by `occurredAt DESC, id ASC`. Its opaque cursor is bound to strict
+  UTC range, Actor, Action, and Subject filters. The default page size is 50,
+  the maximum is 100, and one query may span at most 366 days. The UI defaults
+  to the most recent 30 days and enriches retained identifiers with current
+  display data when that data still exists.
+- Rate limiting is best-effort abuse control rather than a global security
+  invariant. It never locks a User. A coarse IP limit protects all Management
+  API requests except health; credential exchange adds stricter IP and Login
+  User Email budgets; privileged identity mutations and general authenticated
+  Management requests use separate Actor budgets. Every rejected request uses
+  the same `429 rate-limited` result and a 60-second `Retry-After` value without
+  revealing which budget was exhausted.
 
 The password hashing implementation must store an algorithm and parameters with
 each hash so it can rehash on login. The exact Workers-compatible KDF is chosen
@@ -809,6 +824,14 @@ Instance in the same account.
 9. records the coherent Instance version; and
 10. prints the Management address and a one-time initial setup token.
 
+Drizzle Kit generates reviewed, forward-only SQL migrations from the typed
+schema; Wrangler lists and applies them to D1. Applied migration files are
+immutable. Production upgrades export D1 before applying pending migrations,
+then deploy Management before Redirect and record a coherent version only after
+both Workers and the schema are compatible. Destructive changes use
+expand/migrate/contract across releases; schema rollback uses the documented
+restore workflow rather than down migrations.
+
 The setup token is shown only when first created in an interactive terminal,
 expires after 30 minutes, is stored only as a hash in the `initial_setup`
 record, and is invalidated after use. An idempotent rerun preserves a valid
@@ -825,8 +848,12 @@ changes use expand/migrate/contract across releases. Partial Worker upgrades are
 not supported.
 
 Backup commands use D1 Time Travel for recent operational recovery and SQL
-export for portable backups. Restore always presents the target and impact and
-requires separate confirmation.
+export for portable backups. Every production migration requires a preceding
+export, and Owners are advised to keep periodic encrypted exports outside the
+Cloudflare account. Restore always presents the target and impact, requires
+separate confirmation, pauses Management mutations, Queue consumption, and
+retention cleanup, and invalidates Sessions and one-time handoffs before
+traffic resumes. The full procedure lives in `docs/operations.md`.
 
 ## Testing and verification
 
@@ -855,12 +882,27 @@ and idempotent.
 - Observe Queue backlog, retry count, dead-letter count, D1 overloads, consumer
   watermark, and analytics ingestion loss.
 - Consume analytics in batches of at most 10 with a one-second timeout and one
-  concurrent consumer. Retry failed messages three times with a 60-second delay
-  before moving them to the dead-letter queue; replay and DLQ operations belong
-  to the operations baseline.
-- Rate limits protect authentication and management mutations. Redirect abuse
+  concurrent consumer. The primary Queue and dead-letter queue retain messages
+  for 24 hours. Retry failed messages three times with a 60-second delay before
+  dead-lettering them. Valid batch members acknowledge independently; shared
+  storage failures retry every unacknowledged member. DLQ replay is an explicit
+  Owner operation that preserves Event IDs, and discard is separately confirmed.
+- Rate limits protect authentication and Management requests with independent
+  budgets: 300 requests per IP per minute before Management processing, 10
+  credential exchanges per IP per minute, five Login attempts per normalized
+  User Email per minute, 10 privileged identity mutations per Actor per minute,
+  and 300 general Management requests per User per minute. Redirect abuse
   controls must prefer completing the redirect while optionally excluding the
   event from analytics.
+- `ANALYTICS_HMAC_KEY` is a long-lived 256-bit Worker Secret generated once and
+  preserved across deployments. Rotation is an explicit Owner operation that
+  warns about a temporary Unique Human Click discontinuity. Cloudflare
+  credentials and Worker Secrets never enter the repository, Instance config,
+  logs, Audit Events, or D1 exports.
+- Management HTTP, UI, Queue-consumer, Cron, and deployment failures do not
+  affect Redirect while Redirect and D1 remain available. A warm cache may
+  outlive a D1 failure, but a cache miss during a shared D1 outage returns `503`;
+  the system does not claim D1-independent redirect availability.
 - The deployment CLI provides a diagnostic command for resource bindings,
   deployed versions, pending migrations, Queue health, and Management reachability.
 - Sentry or another external monitor is optional and outside the MVP.
@@ -880,7 +922,6 @@ and idempotent.
 ## Deliberately open details
 
 - The password KDF and parameters, pending Workers CPU benchmarks.
-- The concrete rate-limit adapter and initial thresholds.
 - Analytics Engine implementation and mode-switch UX after the MVP.
 
 These choices must respect the interfaces and constraints above but do not

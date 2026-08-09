@@ -2,5 +2,5 @@ import type { ManagementDependencies } from "../../../dependencies";
 
 export type LinksHttpDependencies = Pick<
   ManagementDependencies,
-  "createLinks" | "createRequestAuthentication" | "hasCapability"
+  "createLinks" | "createRequestAuthentication" | "createRequestRateLimits" | "hasCapability"
 >;

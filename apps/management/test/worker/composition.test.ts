@@ -51,6 +51,9 @@ describe("management app composition", () => {
       createAnalytics: () => {
         throw new Error("Links HTTP must not create Analytics");
       },
+      createAuditEvents: () => {
+        throw new Error("Links HTTP must not create Audit Events");
+      },
       createIdentity: () => {
         throw new Error("Links HTTP must not create Identity directly");
       },
@@ -69,6 +72,11 @@ describe("management app composition", () => {
         },
         async authenticateMutation() {
           throw new Error("Unexpected mutation authentication");
+        },
+      }),
+      createRequestRateLimits: () => ({
+        async consume() {
+          return true;
         },
       }),
       hasCapability: () => true,

@@ -153,5 +153,5 @@ A formerly public Alias retained after its Link is permanently deleted so that t
 _Avoid_: Tombstone, deleted alias
 
 **Audit Event**:
-A retained record of a successful administrative command that changed an Instance, containing identifiers and non-sensitive metadata but not Link titles or Destinations. No-op commands and failed attempts do not produce Audit Events.
+A record of a successful administrative command that changed an Instance, retained for the lifetime of the Instance and containing identifiers and non-sensitive metadata but not Link titles or Destinations. No-op commands, failed attempts, and automated retention do not produce Audit Events.
 _Avoid_: Audit log entry, request log

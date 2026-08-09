@@ -1,5 +1,5 @@
 import { getRouteApi, Link, Outlet } from "@tanstack/react-router";
-import { ChartNoAxesCombined, Link2, LogOut, Menu, Shield, Users } from "lucide-react";
+import { ChartNoAxesCombined, Link2, ListChecks, LogOut, Menu, Shield, Users } from "lucide-react";
 import { useState } from "react";
 
 import { noContentRequest } from "./api";
@@ -70,16 +70,7 @@ export function AppShell() {
             <ChartNoAxesCombined aria-hidden="true" size={20} strokeWidth={1.75} />
             Analytics
           </Link>
-          {session.user.role === "administrator" && (
-            <Link
-              className={navigationLinkClass}
-              to="/users"
-              activeProps={{ "aria-current": "page" }}
-            >
-              <Users aria-hidden="true" size={20} strokeWidth={1.75} />
-              Users
-            </Link>
-          )}
+          {session.user.role === "administrator" && <AdministratorNavigation />}
           <Link
             className={navigationLinkClass}
             to="/security"
@@ -150,10 +141,7 @@ export function AppShell() {
             Analytics
           </Link>
           {session.user.role === "administrator" && (
-            <Link className={navigationLinkClass} to="/users" onClick={() => setMobileMenu(false)}>
-              <Users aria-hidden="true" size={20} strokeWidth={1.75} />
-              Users
-            </Link>
+            <AdministratorNavigation onNavigate={() => setMobileMenu(false)} />
           )}
           <Link className={navigationLinkClass} to="/security" onClick={() => setMobileMenu(false)}>
             <Shield aria-hidden="true" size={20} strokeWidth={1.75} />
@@ -167,6 +155,31 @@ export function AppShell() {
         </nav>
       </AppDialog>
     </div>
+  );
+}
+
+function AdministratorNavigation({ onNavigate }: Readonly<{ onNavigate?: () => void }>) {
+  return (
+    <>
+      <Link
+        className={navigationLinkClass}
+        to="/users"
+        activeProps={{ "aria-current": "page" }}
+        onClick={onNavigate}
+      >
+        <Users aria-hidden="true" size={20} strokeWidth={1.75} />
+        Users
+      </Link>
+      <Link
+        className={navigationLinkClass}
+        to="/audit"
+        activeProps={{ "aria-current": "page" }}
+        onClick={onNavigate}
+      >
+        <ListChecks aria-hidden="true" size={20} strokeWidth={1.75} />
+        Audit
+      </Link>
+    </>
   );
 }
 

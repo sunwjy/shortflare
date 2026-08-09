@@ -11,6 +11,8 @@ import {
 import { createManagementHono } from "../../../transport/factory";
 import { parseJson } from "../../../transport/json";
 import { requireJsonRequestIntegrity } from "../../../transport/request-integrity";
+import { createRequestRateLimitMiddleware } from "../../../transport/request-rate-limits";
+import { normalizeUserEmail } from "..";
 import { deleteSessionCookie, setSessionCookie } from "./cookies";
 import {
   loginRequest,
@@ -26,14 +28,16 @@ const presentAuthenticationFailure: AuthenticationFailurePresenter = (context, k
 export function createAuthRoutes(
   dependencies: Pick<
     ManagementDependencies,
-    "createIdentity" | "createRequestAuthentication" | "hasCapability"
+    "createIdentity" | "createRequestAuthentication" | "createRequestRateLimits" | "hasCapability"
   >,
 ) {
   const authRoutes = createManagementHono();
   const authentication = createAuthenticationMiddleware(dependencies, presentAuthenticationFailure);
   const requireIntegrity = requireJsonRequestIntegrity(presentAuthenticationFailure);
+  const rateLimits = createRequestRateLimitMiddleware(dependencies);
+  const requireCredentialSource = rateLimits.requireCredentialSource();
 
-  authRoutes.post("/setup", requireIntegrity, async (context) => {
+  authRoutes.post("/setup", requireIntegrity, requireCredentialSource, async (context) => {
     const request = await parsePublicJson(context, setupRequest);
     if (request instanceof Response) return request;
     const result = await dependencies
@@ -42,9 +46,14 @@ export function createAuthRoutes(
     return context.json(result, result.ok ? 201 : 400);
   });
 
-  authRoutes.post("/login", requireIntegrity, async (context) => {
+  authRoutes.post("/login", requireIntegrity, requireCredentialSource, async (context) => {
     const request = await parsePublicJson(context, loginRequest);
     if (request instanceof Response) return request;
+    const rateLimitFailure = await rateLimits.enforceLoginTarget(
+      context,
+      normalizeUserEmail(request.email),
+    );
+    if (rateLimitFailure) return rateLimitFailure;
     const result = await dependencies.createIdentity(context.env).sessions.login(request);
     if (!result.ok) return context.json(result, 401);
     setSessionCookie(context, result.session);
@@ -67,6 +76,9 @@ export function createAuthRoutes(
       deleteSessionCookie(context);
       return context.json({ ok: false, kind: "unauthenticated" } as const, 401);
     }
+    context.set("authenticatedUser", result.session.user);
+    const rateLimitFailure = await rateLimits.enforceGeneralUser(context);
+    if (rateLimitFailure) return rateLimitFailure;
     return context.json({
       ok: true as const,
       user: result.session.user,
@@ -85,36 +97,52 @@ export function createAuthRoutes(
     },
   );
 
-  authRoutes.post("/invitations/accept", requireIntegrity, async (context) => {
-    const request = await parsePublicJson(context, tokenPasswordRequest);
-    if (request instanceof Response) return request;
-    const result = await dependencies
-      .createIdentity(context.env)
-      .invitations.acceptInvitation(request);
-    return context.json(result, result.ok ? 200 : 400);
-  });
+  authRoutes.post(
+    "/invitations/accept",
+    requireIntegrity,
+    requireCredentialSource,
+    async (context) => {
+      const request = await parsePublicJson(context, tokenPasswordRequest);
+      if (request instanceof Response) return request;
+      const result = await dependencies
+        .createIdentity(context.env)
+        .invitations.acceptInvitation(request);
+      return context.json(result, result.ok ? 200 : 400);
+    },
+  );
 
-  authRoutes.post("/password-resets/use", requireIntegrity, async (context) => {
-    const request = await parsePublicJson(context, tokenPasswordRequest);
-    if (request instanceof Response) return request;
-    const result = await dependencies
-      .createIdentity(context.env)
-      .passwordResets.usePasswordReset(request);
-    return context.json(result, result.ok ? 200 : 400);
-  });
+  authRoutes.post(
+    "/password-resets/use",
+    requireIntegrity,
+    requireCredentialSource,
+    async (context) => {
+      const request = await parsePublicJson(context, tokenPasswordRequest);
+      if (request instanceof Response) return request;
+      const result = await dependencies
+        .createIdentity(context.env)
+        .passwordResets.usePasswordReset(request);
+      return context.json(result, result.ok ? 200 : 400);
+    },
+  );
 
-  authRoutes.post("/operator-recovery", requireIntegrity, async (context) => {
-    const request = await parsePublicJson(context, tokenPasswordRequest);
-    if (request instanceof Response) return request;
-    const result = await dependencies
-      .createIdentity(context.env)
-      .operatorRecovery.useOperatorRecovery(request);
-    return context.json(result, result.ok ? 200 : 400);
-  });
+  authRoutes.post(
+    "/operator-recovery",
+    requireIntegrity,
+    requireCredentialSource,
+    async (context) => {
+      const request = await parsePublicJson(context, tokenPasswordRequest);
+      if (request instanceof Response) return request;
+      const result = await dependencies
+        .createIdentity(context.env)
+        .operatorRecovery.useOperatorRecovery(request);
+      return context.json(result, result.ok ? 200 : 400);
+    },
+  );
 
   authRoutes.post(
     "/reauthenticate",
     requireIntegrity,
+    requireCredentialSource,
     authentication.requireMutationSession(),
     async (context) => {
       const request = await parseJson(context.req.raw, passwordRequest);
@@ -138,6 +166,7 @@ export function createAuthRoutes(
   authRoutes.post(
     "/password",
     requireIntegrity,
+    requireCredentialSource,
     authentication.requireMutationSession(),
     async (context) => {
       const request = await parseJson(context.req.raw, passwordChangeRequest);

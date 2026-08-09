@@ -2,12 +2,27 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 import { app as managementApp } from "../../management/src/worker/index";
+import type { ManagementBindings } from "../../management/src/worker/environment";
 import { createIdentity } from "../../management/src/worker/modules/identity";
 import redirectApp from "../src/index";
 import { createTestExecutionContext } from "./execution-context";
 
 describe("first end-to-end vertical slice", () => {
   it("creates a Link through Management and resolves it through Redirect", async () => {
+    const allowAll: RateLimit = {
+      async limit() {
+        return { success: true };
+      },
+    };
+    const managementEnv = {
+      DB: env.DB,
+      REDIRECT_DOMAIN: env.REDIRECT_DOMAIN,
+      MANAGEMENT_SOURCE_RATE_LIMITER: allowAll,
+      CREDENTIAL_SOURCE_RATE_LIMITER: allowAll,
+      LOGIN_TARGET_RATE_LIMITER: allowAll,
+      PRIVILEGED_ACTOR_RATE_LIMITER: allowAll,
+      GENERAL_USER_RATE_LIMITER: allowAll,
+    } satisfies ManagementBindings;
     await createIdentity({ db: env.DB }).initialSetup.writeInitialSetup({
       displayEmail: "Admin@Example.com",
       token: "setup-secret",
@@ -26,7 +41,7 @@ describe("first end-to-end vertical slice", () => {
           password: "violet glacier orbits quietly 729",
         }),
       },
-      env,
+      managementEnv,
     );
     expect(setupResponse.status).toBe(201);
     const loginResponse = await managementApp.request(
@@ -42,7 +57,7 @@ describe("first end-to-end vertical slice", () => {
           password: "violet glacier orbits quietly 729",
         }),
       },
-      env,
+      managementEnv,
     );
     expect(loginResponse.status).toBe(200);
     const loginBody = (await loginResponse.json()) as { csrfToken: string };
@@ -67,7 +82,7 @@ describe("first end-to-end vertical slice", () => {
           destination: "https://example.com/guide?tag=stored",
         }),
       },
-      env,
+      managementEnv,
     );
     expect(createResponse.status).toBe(201);
 

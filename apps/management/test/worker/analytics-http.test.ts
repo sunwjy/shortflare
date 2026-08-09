@@ -52,6 +52,9 @@ describe("Management Analytics HTTP interface", () => {
 
     const app = createManagementApp({
       createAnalytics: () => analytics,
+      createAuditEvents: () => {
+        throw new Error("Analytics reads must not create Audit Events");
+      },
       createIdentity: () => {
         throw new Error("Analytics reads must not create Identity directly");
       },
@@ -70,6 +73,11 @@ describe("Management Analytics HTTP interface", () => {
         },
         async authenticateMutation() {
           throw new Error("Unexpected mutation authentication");
+        },
+      }),
+      createRequestRateLimits: () => ({
+        async consume() {
+          return true;
         },
       }),
       hasCapability: (_user, capability) => capability === "view-analytics",

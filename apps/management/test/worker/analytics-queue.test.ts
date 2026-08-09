@@ -71,4 +71,51 @@ describe("Management Analytics Queue interface", () => {
       summary: { humanClicks: 1, uniqueHumanClicks: 1, suspectedBotClicks: 0 },
     });
   });
+
+  it("leaves the whole batch unacknowledged when shared D1 ingestion fails", async () => {
+    const batch = createMessageBatch("shortflare-events", [
+      { id: "message-one", timestamp: new Date(), attempts: 1, body: event },
+      {
+        id: "message-two",
+        timestamp: new Date(),
+        attempts: 1,
+        body: { ...event, eventId: "event-2" },
+      },
+    ]);
+    const context = createExecutionContext();
+    await env.DB.prepare(
+      `CREATE TRIGGER reject_analytics_ingestion
+       BEFORE INSERT ON analytics_events
+       BEGIN
+         SELECT RAISE(ABORT, 'simulated shared D1 failure');
+       END`,
+    ).run();
+
+    try {
+      await expect(worker.queue(batch, env)).rejects.toThrow();
+      const result = await getQueueResult(batch, context);
+      expect(result.explicitAcks).toEqual([]);
+      expect(result.retryMessages).toEqual([]);
+    } finally {
+      await env.DB.prepare("DROP TRIGGER reject_analytics_ingestion").run();
+    }
+  });
+
+  it("retries exhausted poison so the configured platform policy dead-letters it", async () => {
+    const batch = createMessageBatch("shortflare-events", [
+      {
+        id: "message-poison",
+        timestamp: new Date(),
+        attempts: 4,
+        body: { schemaVersion: 2, eventId: "future-event" },
+      },
+    ]);
+    const context = createExecutionContext();
+
+    await worker.queue(batch, env);
+
+    const result = await getQueueResult(batch, context);
+    expect(result.explicitAcks).toEqual([]);
+    expect(result.retryMessages).toEqual([{ msgId: "message-poison" }]);
+  });
 });

@@ -5,6 +5,7 @@ import { createMiddleware } from "hono/factory";
 import type { Capability } from "../access-control";
 import type { ManagementDependencies } from "../dependencies";
 import type { ManagementEnvironment } from "../environment";
+import { createRequestRateLimitMiddleware } from "./request-rate-limits";
 
 const sessionCookieName = "__Host-shortflare_session";
 
@@ -22,13 +23,14 @@ export type AuthenticationFailurePresenter = (
 
 type AuthenticationDependencies = Pick<
   ManagementDependencies,
-  "createRequestAuthentication" | "hasCapability"
+  "createRequestAuthentication" | "createRequestRateLimits" | "hasCapability"
 >;
 
 export function createAuthenticationMiddleware(
   dependencies: AuthenticationDependencies,
   presentFailure: AuthenticationFailurePresenter,
 ) {
+  const rateLimits = createRequestRateLimitMiddleware(dependencies);
   const requireSafeSession = () =>
     createMiddleware<ManagementEnvironment>(async (context, next) => {
       const sessionToken = getCookie(context, sessionCookieName);
@@ -38,6 +40,8 @@ export function createAuthenticationMiddleware(
         .authenticateSafe(sessionToken);
       if (!authentication.ok) return presentFailure(context, authentication.kind, 401);
       context.set("authenticatedUser", authentication.user);
+      const rateLimitFailure = await rateLimits.enforceGeneralUser(context);
+      if (rateLimitFailure) return rateLimitFailure;
       await next();
     });
 
@@ -58,6 +62,8 @@ export function createAuthenticationMiddleware(
       context.set("authenticatedUser", authentication.user);
       context.set("sessionToken", sessionToken);
       context.set("recentlyAuthenticated", authentication.recentlyAuthenticated);
+      const rateLimitFailure = await rateLimits.enforceGeneralUser(context);
+      if (rateLimitFailure) return rateLimitFailure;
       await next();
     });
 
