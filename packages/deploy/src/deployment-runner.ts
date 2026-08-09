@@ -1,4 +1,4 @@
-import type { DeploymentAction, DeploymentPlan } from "./deployment-plan";
+import type { DeploymentAction, DeploymentPlan } from "./deployment-plan.js";
 
 export type DeploymentApproval =
   | Readonly<{ kind: "none" }>

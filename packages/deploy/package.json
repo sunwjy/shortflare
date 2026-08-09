@@ -1,23 +1,27 @@
 {
   "name": "shortflare",
   "version": "0.0.0",
-  "private": true,
+  "private": false,
   "files": [
-    "dist"
+    "dist",
+    "release"
   ],
   "type": "module",
   "types": "./dist/index.d.ts",
   "exports": "./dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node dist/assemble-release.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "wrangler": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@shortflare/management": "workspace:*",
+    "@shortflare/redirect-worker": "workspace:*",
     "vitest": "catalog:"
   }
 }

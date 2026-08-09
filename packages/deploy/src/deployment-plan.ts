@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { ReleaseManifest } from "./release-manifest";
+import type { ReleaseManifest } from "./release-manifest.js";
 
 export type FreshAccountState = Readonly<{
   kind: "absent";

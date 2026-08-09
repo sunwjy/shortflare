@@ -1,4 +1,4 @@
-export { parseCliArguments } from "./cli-contract";
+export { parseCliArguments } from "./cli-contract.js";
 export type {
   CliCommand,
   CliOutputMode,
@@ -7,8 +7,8 @@ export type {
   ParseCliArgumentsResult,
   RecoverCommand,
   RecoveryAction,
-} from "./cli-contract";
-export { createDeploymentPlan } from "./deployment-plan";
+} from "./cli-contract.js";
+export { createDeploymentPlan } from "./deployment-plan.js";
 export type {
   CreateDeploymentPlanResult,
   DeploymentAction,
@@ -18,8 +18,8 @@ export type {
   FreshAccountState,
   ObservedDeploymentDrift,
   ObservedDeploymentState,
-} from "./deployment-plan";
-export { runDeploymentPlan } from "./deployment-runner";
+} from "./deployment-plan.js";
+export { runDeploymentPlan } from "./deployment-runner.js";
 export type {
   DeploymentActionExecutor,
   DeploymentApproval,
@@ -27,18 +27,18 @@ export type {
   DeploymentFailure,
   DeploymentRecovery,
   RunDeploymentPlanResult,
-} from "./deployment-runner";
+} from "./deployment-runner.js";
 export {
   parseInstanceConfig,
   resolveShortflarePaths,
   writeInstanceConfig,
-} from "./local-instance-config";
-export type { InstanceConfig, ParseInstanceConfigResult } from "./local-instance-config";
-export { hashReleaseArtifact, verifyReleaseBundle } from "./release-bundle";
-export type { VerifyReleaseBundleResult } from "./release-bundle";
-export { parseReleaseManifest } from "./release-manifest";
+} from "./local-instance-config.js";
+export type { InstanceConfig, ParseInstanceConfigResult } from "./local-instance-config.js";
+export { hashReleaseArtifact, verifyReleaseBundle } from "./release-bundle.js";
+export type { VerifyReleaseBundleResult } from "./release-bundle.js";
+export { parseReleaseManifest } from "./release-manifest.js";
 export type {
   ParseReleaseManifestResult,
   ReleaseManifest,
   ReleaseManifestIssue,
-} from "./release-manifest";
+} from "./release-manifest.js";
