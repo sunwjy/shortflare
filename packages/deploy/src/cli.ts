@@ -59,7 +59,12 @@ function renderHumanResult(
   command: "deploy" | "diagnose" | "recover",
   result: CliApplicationResult,
 ) {
-  if (result.ok) return `Shortflare ${command} completed.`;
+  if (result.ok) {
+    const setupToken = result.setupToken;
+    return typeof setupToken === "string"
+      ? `Shortflare ${command} completed.\nOne-time setup token: ${setupToken}`
+      : `Shortflare ${command} completed.`;
+  }
   const error = result.error;
   if (
     typeof error === "object" &&

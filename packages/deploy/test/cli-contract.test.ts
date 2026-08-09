@@ -72,8 +72,31 @@ describe("Shortflare CLI contract", () => {
       },
     });
     expect(parseCliArguments(["recover", "orphan-resources", "--json"])).toEqual({
+      ok: false,
+      exitCode: 4,
+      error: {
+        kind: "approval-required",
+        message: "Recovery requires --yes after reviewing diagnosis",
+      },
+    });
+    expect(
+      parseCliArguments([
+        "recover",
+        "orphan-resources",
+        "--json",
+        "--yes",
+        "--resource",
+        "primary-queue",
+      ]),
+    ).toEqual({
       ok: true,
-      command: { kind: "recover", mode: "json", action: "orphan-resources" },
+      command: {
+        kind: "recover",
+        mode: "json",
+        action: "orphan-resources",
+        approved: true,
+        resource: "primary-queue",
+      },
     });
   });
 

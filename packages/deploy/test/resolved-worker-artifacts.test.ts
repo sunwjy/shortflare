@@ -14,6 +14,7 @@ describe("resolved Worker artifacts", () => {
     const result = await prepareWorkerArtifacts({
       releaseRoot,
       temporaryRoot: path.join(temporaryRoot, "resolved"),
+      accountId: "account-1",
       databaseId: "database-1",
       redirectDomain: "go.example.com",
       rateLimitNamespaceBase: 25_000,
@@ -21,6 +22,8 @@ describe("resolved Worker artifacts", () => {
 
     const management = JSON.parse(await readFile(result.managementConfig, "utf8"));
     const redirect = JSON.parse(await readFile(result.redirectConfig, "utf8"));
+    expect(management.account_id).toBe("account-1");
+    expect(redirect.account_id).toBe("account-1");
     expect(management.d1_databases[0]).toMatchObject({
       database_name: "shortflare",
       database_id: "database-1",

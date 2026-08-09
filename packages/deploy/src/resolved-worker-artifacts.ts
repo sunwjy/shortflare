@@ -12,6 +12,7 @@ const d1BindingSchema = z.looseObject({
 const workerConfigSchema = z.looseObject({
   name: z.string(),
   main: z.string(),
+  account_id: z.string().optional(),
   d1_databases: z.array(d1BindingSchema),
 });
 const managementConfigSchema = workerConfigSchema.extend({
@@ -28,6 +29,7 @@ export async function prepareWorkerArtifacts(
   input: Readonly<{
     releaseRoot: string;
     temporaryRoot: string;
+    accountId: string;
     databaseId: string;
     redirectDomain: string;
     rateLimitNamespaceBase: number;
@@ -60,6 +62,8 @@ export async function prepareWorkerArtifacts(
   );
   const redirect = redirectConfigSchema.parse(JSON.parse(await readFile(redirectConfig, "utf8")));
 
+  management.account_id = input.accountId;
+  redirect.account_id = input.accountId;
   management.vars.REDIRECT_DOMAIN = input.redirectDomain;
   management.d1_databases = management.d1_databases.map((binding) => ({
     ...binding,

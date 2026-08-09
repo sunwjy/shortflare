@@ -73,4 +73,31 @@ describe("pinned Wrangler adapter", () => {
     ]);
     expect(JSON.stringify(calls[0]?.arguments)).not.toContain("secret-value");
   });
+
+  it("imports and validates an upgrade backup in isolated local D1", async () => {
+    const calls: string[][] = [];
+    const adapter = createWranglerAdapter({
+      run: async (arguments_) => {
+        calls.push([...arguments_]);
+        return {
+          exitCode: 0,
+          stdout: arguments_.includes("--json")
+            ? JSON.stringify([{ success: true, results: [{ valid: 1 }] }])
+            : "",
+          stderr: "",
+        };
+      },
+    });
+
+    await expect(
+      adapter.verifyBackup(
+        "/resolved/wrangler.json",
+        "/backups/upgrade.sql",
+        "/temporary/local-d1",
+      ),
+    ).resolves.toBeUndefined();
+    expect(calls[0]).toContain("--file");
+    expect(calls[1]).toContain("migrations");
+    expect(calls[2]).toContain("--json");
+  });
 });

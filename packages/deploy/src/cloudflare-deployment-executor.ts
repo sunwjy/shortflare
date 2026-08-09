@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { z } from "zod";
+
 import type { CloudflareApi, CloudflareApiFailure } from "./cloudflare-api.js";
 import { writeD1Backup } from "./d1-backup.js";
 import type { DeploymentAction, DeploymentPlan } from "./deployment-plan.js";
@@ -14,9 +16,14 @@ const resourceNames = {
   redirect: "shortflare-redirect",
 } as const;
 const queueRetentionSeconds = 86_400;
+const setupEligibilitySchema = z.looseObject({
+  setupCompletedAt: z.number().nullable(),
+  activeAdministrators: z.number().int().nonnegative(),
+});
 
 export type CloudflareDeploymentOutput = Readonly<{
   databaseId?: string;
+  instanceId?: string;
   backup?: Readonly<{ path: string; sha256: string; bookmark: string }>;
   setupToken?: string;
 }>;
@@ -27,6 +34,7 @@ export function createCloudflareDeploymentExecutor(
     wrangler: WranglerAdapter;
     accountId: string;
     existingDatabaseId?: string;
+    existingInstanceId?: string;
     releaseRoot: string;
     temporaryRoot: string;
     backupDirectory: string;
@@ -39,11 +47,18 @@ export function createCloudflareDeploymentExecutor(
     fetch: typeof globalThis.fetch;
     delay: (milliseconds: number) => Promise<void>;
   }>,
-): DeploymentActionExecutor & Readonly<{ getOutput(): CloudflareDeploymentOutput }> {
+): DeploymentActionExecutor &
+  Readonly<{
+    getOutput(): CloudflareDeploymentOutput;
+    getDatabaseId(): string | undefined;
+    getInstanceId(): string | undefined;
+    getSetupToken(): string | undefined;
+  }> {
   let databaseId = input.existingDatabaseId;
   let artifacts: Awaited<ReturnType<typeof prepareWorkerArtifacts>> | undefined;
   let backup: CloudflareDeploymentOutput["backup"];
   let setupToken: string | undefined;
+  let instanceId = input.existingInstanceId;
 
   async function resolvedArtifacts() {
     if (artifacts !== undefined) return artifacts;
@@ -52,6 +67,7 @@ export function createCloudflareDeploymentExecutor(
     artifacts = await prepareWorkerArtifacts({
       releaseRoot: input.releaseRoot,
       temporaryRoot: input.temporaryRoot,
+      accountId: input.accountId,
       databaseId,
       redirectDomain: input.redirectDomain,
       rateLimitNamespaceBase: 10_000,
@@ -70,9 +86,19 @@ export function createCloudflareDeploymentExecutor(
     getOutput() {
       return {
         ...(databaseId === undefined ? {} : { databaseId }),
+        ...(instanceId === undefined ? {} : { instanceId }),
         ...(backup === undefined ? {} : { backup }),
         ...(setupToken === undefined ? {} : { setupToken }),
       };
+    },
+    getDatabaseId() {
+      return databaseId;
+    },
+    getInstanceId() {
+      return instanceId;
+    },
+    getSetupToken() {
+      return setupToken;
     },
 
     async revalidate(action) {
@@ -125,11 +151,12 @@ export function createCloudflareDeploymentExecutor(
         return;
       }
       case "write-deployment-marker":
+        instanceId = input.randomId();
         await query(
           `INSERT INTO deployment_marker
              (singleton_key, instance_id, installation_release, created_at)
            VALUES (1, ?, ?, ?)`,
-          [input.randomId(), plan.targetRelease, String(input.now().getTime())],
+          [instanceId, plan.targetRelease, String(input.now().getTime())],
         );
         return;
       case "create-queue":
@@ -165,6 +192,11 @@ export function createCloudflareDeploymentExecutor(
         return;
       case "verify-backup":
         if (backup === undefined) throw new Error("D1 backup was not completed");
+        await input.wrangler.verifyBackup(
+          (await resolvedArtifacts()).managementConfig,
+          backup.path,
+          `${input.temporaryRoot}-backup-validation`,
+        );
         return;
       case "record-coherent-release":
         await recordCoherentRelease(plan);
@@ -301,6 +333,16 @@ export function createCloudflareDeploymentExecutor(
   }
 
   async function createSetupHandoff(administratorEmail: string) {
+    const eligibilityRows = await query(
+      `SELECT i.setup_completed_at AS setupCompletedAt,
+              COUNT(u.id) AS activeAdministrators
+       FROM instances i
+       LEFT JOIN users u ON u.state = 'active' AND u.role = 'administrator'
+       WHERE i.singleton_key = 1
+       GROUP BY i.singleton_key, i.setup_completed_at`,
+    );
+    const eligibility = setupEligibilitySchema.parse(eligibilityRows[0]);
+    if (eligibility.setupCompletedAt !== null || eligibility.activeAdministrators > 0) return;
     const existing = await query(
       `SELECT expires_at AS expiresAt FROM initial_setup WHERE singleton_key = 1
        AND expires_at > ? LIMIT 1`,

@@ -12,11 +12,18 @@ export type FreshAccountState = Readonly<{
 export type ExistingInstanceState = Readonly<{
   kind: "present";
   accountId: string;
+  databaseId?: string;
   instanceId: string;
   coherentRelease: string;
   schemaVersion: number;
   pendingMigrations: readonly string[];
   analyticsSecret: "present" | "missing";
+  initialSetup?: "completed" | "pending" | "required";
+  interruptedAttempts?: readonly Readonly<{
+    id: string;
+    status: "running" | "failed";
+    failedStage?: string;
+  }>[];
   drift: readonly ObservedDeploymentDrift[];
 }>;
 
@@ -166,6 +173,31 @@ export function createDeploymentPlan(
     if (
       targetsCurrentRelease &&
       input.observed.pendingMigrations.length === 0 &&
+      input.observed.drift.length === 0 &&
+      input.observed.initialSetup === "required"
+    ) {
+      return {
+        ok: true,
+        plan: finalizePlan({
+          operation: "install",
+          accountId: input.observed.accountId,
+          sourceRelease: input.observed.coherentRelease,
+          targetRelease: input.target.release,
+          targetManifestDigest: hashReleaseManifest(input.target),
+          destructive: false,
+          actions: [
+            {
+              kind: "create-setup-handoff",
+              administratorEmail: input.requested.administratorEmail,
+            },
+          ],
+        }),
+      };
+    }
+
+    if (
+      targetsCurrentRelease &&
+      input.observed.pendingMigrations.length === 0 &&
       input.observed.drift.length === 0
     ) {
       return {
@@ -202,11 +234,30 @@ export function createDeploymentPlan(
                 },
               ] as const)
             : []),
+          {
+            kind: "create-queue",
+            resource: "shortflare-events-dlq",
+            role: "dead-letter",
+          },
+          { kind: "create-queue", resource: "shortflare-events", role: "primary" },
           { kind: "upload-worker", worker: "management" },
           { kind: "activate-worker", worker: "management" },
+          {
+            kind: "configure-domain",
+            worker: "management",
+            domain:
+              input.requested.managementDomain === undefined
+                ? { kind: "workers-dev" }
+                : { kind: "custom-domain", hostname: input.requested.managementDomain },
+          },
           { kind: "verify-worker", worker: "management" },
           { kind: "upload-worker", worker: "redirect" },
           { kind: "activate-worker", worker: "redirect" },
+          {
+            kind: "configure-domain",
+            worker: "redirect",
+            domain: { kind: "custom-domain", hostname: input.requested.redirectDomain },
+          },
           { kind: "verify-worker", worker: "redirect" },
           { kind: "record-coherent-release", release: input.target.release },
         ],

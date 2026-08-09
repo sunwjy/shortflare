@@ -151,11 +151,23 @@ describe("Deployment Reconciliation plan", () => {
           { kind: "export-d1" },
           { kind: "verify-backup" },
           { kind: "apply-migrations", migrations: ["0005_deployment_control.sql"] },
+          {
+            kind: "create-queue",
+            resource: "shortflare-events-dlq",
+            role: "dead-letter",
+          },
+          { kind: "create-queue", resource: "shortflare-events", role: "primary" },
           { kind: "upload-worker", worker: "management" },
           { kind: "activate-worker", worker: "management" },
+          { kind: "configure-domain", worker: "management", domain: { kind: "workers-dev" } },
           { kind: "verify-worker", worker: "management" },
           { kind: "upload-worker", worker: "redirect" },
           { kind: "activate-worker", worker: "redirect" },
+          {
+            kind: "configure-domain",
+            worker: "redirect",
+            domain: { kind: "custom-domain", hostname: "go.example.com" },
+          },
           { kind: "verify-worker", worker: "redirect" },
           { kind: "record-coherent-release", release: "1.0.0" },
         ],
@@ -333,6 +345,37 @@ describe("Deployment Reconciliation plan", () => {
     ]);
     expect(JSON.stringify(result)).not.toContain("create-d1");
     expect(JSON.stringify(result)).not.toContain("write-deployment-marker");
+  });
+
+  it("repairs a missing first setup handoff after the release became coherent", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) throw new Error("test manifest must be valid");
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "present",
+        accountId: "account-1",
+        instanceId: "instance-1",
+        coherentRelease: "1.0.0",
+        schemaVersion: 5,
+        pendingMigrations: [],
+        analyticsSecret: "present",
+        initialSetup: "required",
+        drift: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      plan: {
+        operation: "install",
+        actions: [{ kind: "create-setup-handoff", administratorEmail: "owner@example.com" }],
+      },
+    });
   });
 
   it("binds approval to the exact effective domain plan", () => {

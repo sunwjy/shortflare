@@ -65,6 +65,53 @@ describe("Cloudflare Deployment Action executor", () => {
     ]);
     expect(wranglerCalls[0]?.stdin).toBe("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE");
   });
+
+  it("never recreates initial setup after an Administrator is active", async () => {
+    let queryCount = 0;
+    const api = createCloudflareApi({
+      apiToken: "api-token",
+      fetch: async (_input, init) => {
+        queryCount += 1;
+        const body: unknown = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+        expect(body).toMatchObject({ sql: expect.stringContaining("setup_completed_at") });
+        return Response.json({
+          success: true,
+          errors: [],
+          messages: [],
+          result: [
+            { success: true, results: [{ setupCompletedAt: 1_000, activeAdministrators: 1 }] },
+          ],
+        });
+      },
+    });
+    const executor = createCloudflareDeploymentExecutor({
+      api,
+      wrangler: createWranglerAdapter({
+        run: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      }),
+      accountId: "account-1",
+      existingDatabaseId: "database-1",
+      releaseRoot: "/unused",
+      temporaryRoot: "/unused",
+      backupDirectory: "/unused",
+      redirectDomain: "go.example.com",
+      manifest: releaseManifest(),
+      now: () => new Date(1_000),
+      randomBytes: () => Uint8Array.from({ length: 32 }, () => 1),
+      randomId: () => "instance-1",
+      fetch: async () => new Response(null, { status: 200 }),
+      delay: async () => undefined,
+    });
+
+    await expect(
+      executor.apply(
+        { kind: "create-setup-handoff", administratorEmail: "owner@example.com" },
+        deploymentPlan(),
+      ),
+    ).resolves.toEqual({ ok: true });
+    expect(queryCount).toBe(1);
+    expect(executor.getSetupToken()).toBeUndefined();
+  });
 });
 
 function deploymentPlan() {

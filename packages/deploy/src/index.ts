@@ -13,6 +13,8 @@ export type {
 export { createCloudflareApi } from "./cloudflare-api.js";
 export { createCloudflareDeploymentExecutor } from "./cloudflare-deployment-executor.js";
 export type { CloudflareDeploymentOutput } from "./cloudflare-deployment-executor.js";
+export { observeCloudflareDeployment, CloudflareObservationError } from "./cloudflare-observer.js";
+export { createDeploymentApplication } from "./deployment-application.js";
 export type {
   CloudflareApi,
   CloudflareApiFailure,
@@ -62,4 +64,6 @@ export type {
   ReleaseManifestIssue,
 } from "./release-manifest.js";
 export { createWranglerAdapter, WranglerCommandError } from "./wrangler-adapter.js";
+export { createNodeWranglerRun } from "./node-wrangler-runner.js";
+export { createProductionApplication } from "./production-application.js";
 export type { WranglerAdapter, WranglerRun } from "./wrangler-adapter.js";
