@@ -75,7 +75,7 @@ describe("management app composition", () => {
         },
       }),
       createRequestRateLimits: () => ({
-        async limit() {
+        async consume() {
           return true;
         },
       }),

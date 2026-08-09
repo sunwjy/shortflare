@@ -100,4 +100,22 @@ describe("Management Analytics Queue interface", () => {
       await env.DB.prepare("DROP TRIGGER reject_analytics_ingestion").run();
     }
   });
+
+  it("retries exhausted poison so the configured platform policy dead-letters it", async () => {
+    const batch = createMessageBatch("shortflare-events", [
+      {
+        id: "message-poison",
+        timestamp: new Date(),
+        attempts: 4,
+        body: { schemaVersion: 2, eventId: "future-event" },
+      },
+    ]);
+    const context = createExecutionContext();
+
+    await worker.queue(batch, env);
+
+    const result = await getQueueResult(batch, context);
+    expect(result.explicitAcks).toEqual([]);
+    expect(result.retryMessages).toEqual([{ msgId: "message-poison" }]);
+  });
 });

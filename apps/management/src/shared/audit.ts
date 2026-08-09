@@ -1,0 +1,28 @@
+export const auditActions = [
+  "create",
+  "edit",
+  "update-title",
+  "update-destination",
+  "activate",
+  "disable",
+  "archive",
+  "restore",
+  "permanently-delete",
+  "release-alias",
+  "initial-administrator-activate",
+  "invitation-issue",
+  "invitation-reissue",
+  "invitation-accept",
+  "invitation-cancel",
+  "role-change",
+  "user-suspend",
+  "user-reactivate",
+  "password-reset-issue",
+  "password-reset-use",
+  "password-change",
+  "operator-recovery",
+  "analytics-erase",
+  "analytics-recalculate",
+] as const;
+
+export type AuditAction = (typeof auditActions)[number];

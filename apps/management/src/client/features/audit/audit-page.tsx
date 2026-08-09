@@ -7,35 +7,9 @@ import { auditEventsPageResponseSchema } from "../../api-schemas";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { NativeSelect, NativeSelectOption } from "../../components/ui/native-select";
+import { auditActions } from "../../../shared/audit";
 
 const rootApi = getRouteApi("__root__");
-
-const actions = [
-  "create",
-  "edit",
-  "update-title",
-  "update-destination",
-  "activate",
-  "disable",
-  "archive",
-  "restore",
-  "permanently-delete",
-  "release-alias",
-  "initial-administrator-activate",
-  "invitation-issue",
-  "invitation-reissue",
-  "invitation-accept",
-  "invitation-cancel",
-  "role-change",
-  "user-suspend",
-  "user-reactivate",
-  "password-reset-issue",
-  "password-reset-use",
-  "password-change",
-  "operator-recovery",
-  "analytics-erase",
-  "analytics-recalculate",
-] as const;
 
 type Filters = Readonly<{
   start: string;
@@ -84,7 +58,9 @@ function AdministratorAuditPage() {
   return (
     <div className="grid gap-7">
       <header>
-        <h1 className="text-3xl font-semibold tracking-tight">Audit Events</h1>
+        <h1 className="text-[1.75rem] leading-[2.125rem] font-[650] tracking-tight">
+          Audit Events
+        </h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
           Review retained administrative changes and security-sensitive operations.
         </p>
@@ -112,7 +88,7 @@ function AdministratorAuditPage() {
               onChange={(event) => setDraft({ ...draft, action: event.target.value })}
             >
               <NativeSelectOption value="">All actions</NativeSelectOption>
-              {actions.map((action) => (
+              {auditActions.map((action) => (
                 <NativeSelectOption key={action} value={action}>
                   {actionLabel(action)}
                 </NativeSelectOption>
@@ -201,7 +177,7 @@ function AuditEventCollection({ events }: Readonly<{ events: readonly AuditEvent
         <tbody>
           {events.map((event) => (
             <tr className="border-t align-top" key={event.id}>
-              <td className="whitespace-nowrap px-4 py-3">
+              <td className="px-4 py-3 whitespace-nowrap tabular-nums">
                 {new Intl.DateTimeFormat(undefined, {
                   dateStyle: "medium",
                   timeStyle: "short",

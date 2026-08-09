@@ -48,7 +48,8 @@ describe("redirect worker", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("emits only successful GET redirects without making delivery a response dependency", async () => {
+  it("keeps redirecting without Management or Queue availability", async () => {
+    expect("MANAGEMENT" in env).toBe(false);
     const links = createLinks({
       persistence: createD1LinksPersistence(env.DB),
       redirectDomain: "short.test",

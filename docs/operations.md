@@ -42,6 +42,20 @@ most 10 messages with a one-second batch timeout and one concurrent invocation.
 A rejected message retries three times at 60-second intervals before moving to
 the DLQ.
 
+Queue retention belongs to the Cloudflare Queue resource rather than the Worker
+binding in `wrangler.jsonc`. Until Roadmap 10 automates provisioning, create both
+resources with the explicit 86,400-second policy and verify the same setting in
+the resolved Cloudflare account before deployment:
+
+```sh
+wrangler queues create shortflare-events --message-retention-period-secs 86400
+wrangler queues create shortflare-events-dlq --message-retention-period-secs 86400
+```
+
+For existing resources, inspect and update the resolved Queue settings through
+Cloudflare before deploying; do not recreate a non-empty Queue to change this
+property.
+
 - A valid or duplicate Click Event is acknowledged independently.
 - A malformed, unsupported, conflicting, or invalid-reference Event retries in
   isolation and eventually dead-letters.

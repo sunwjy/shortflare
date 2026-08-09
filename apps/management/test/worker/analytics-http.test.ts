@@ -76,7 +76,7 @@ describe("Management Analytics HTTP interface", () => {
         },
       }),
       createRequestRateLimits: () => ({
-        async limit() {
+        async consume() {
           return true;
         },
       }),

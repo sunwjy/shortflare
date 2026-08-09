@@ -156,7 +156,7 @@ function testDependencies(decisions: RateLimitDecision[]): ManagementDependencie
 
 function decisionRateLimits(decisions: RateLimitDecision[]): RequestRateLimits {
   return {
-    async limit(budget, key) {
+    async consume(budget, key) {
       const decision = decisions.shift();
       expect({ budget, key }).toEqual(
         decision === undefined ? undefined : { budget: decision.budget, key: decision.key },

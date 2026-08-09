@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { auditActions } from "../shared/audit";
+
 export const userSchema = z.strictObject({
   id: z.string(),
   email: z.string(),
@@ -161,32 +163,7 @@ export const auditEventsPageResponseSchema = pageSchema(
     id: z.string(),
     occurredAt: z.string(),
     actor: z.strictObject({ id: z.string(), display: z.string().nullable() }),
-    action: z.enum([
-      "create",
-      "edit",
-      "update-title",
-      "update-destination",
-      "activate",
-      "disable",
-      "archive",
-      "restore",
-      "permanently-delete",
-      "release-alias",
-      "initial-administrator-activate",
-      "invitation-issue",
-      "invitation-reissue",
-      "invitation-accept",
-      "invitation-cancel",
-      "role-change",
-      "user-suspend",
-      "user-reactivate",
-      "password-reset-issue",
-      "password-reset-use",
-      "password-change",
-      "operator-recovery",
-      "analytics-erase",
-      "analytics-recalculate",
-    ]),
+    action: z.enum(auditActions),
     subject: z.strictObject({
       id: z.string(),
       kind: z.enum(["instance", "link", "user"]),

@@ -39,7 +39,7 @@ it("serves Links HTTP through injected application and authentication ports", as
       },
     }),
     createRequestRateLimits: () => ({
-      async limit() {
+      async consume() {
         return true;
       },
     }),

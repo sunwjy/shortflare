@@ -12,7 +12,7 @@ export type RateLimitBudget =
   | "general-user";
 
 export type RequestRateLimits = Readonly<{
-  limit(budget: RateLimitBudget, key: string): Promise<boolean>;
+  consume(budget: RateLimitBudget, key: string): Promise<boolean>;
 }>;
 
 type RateLimitDependencies = Pick<ManagementDependencies, "createRequestRateLimits">;
@@ -28,7 +28,7 @@ export function createCloudflareRequestRateLimits(bindings: ManagementBindings):
     "general-user": bindings.GENERAL_USER_RATE_LIMITER,
   };
   return {
-    async limit(budget, key) {
+    async consume(budget, key) {
       return (await limits[budget].limit({ key })).success;
     },
   };
@@ -63,7 +63,7 @@ async function enforceRateLimit(
   budget: RateLimitBudget,
   key: string,
 ) {
-  const allowed = await dependencies.createRequestRateLimits(context.env).limit(budget, key);
+  const allowed = await dependencies.createRequestRateLimits(context.env).consume(budget, key);
   if (allowed) return undefined;
   context.header("retry-after", String(retryAfterSeconds));
   return context.json({ ok: false, kind: "rate-limited" } as const, 429);
