@@ -54,3 +54,5 @@ export type {
   ReleaseManifest,
   ReleaseManifestIssue,
 } from "./release-manifest.js";
+export { createWranglerAdapter, WranglerCommandError } from "./wrangler-adapter.js";
+export type { WranglerRun } from "./wrangler-adapter.js";
