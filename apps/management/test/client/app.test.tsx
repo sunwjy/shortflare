@@ -70,7 +70,6 @@ describe("Management App", () => {
       vi.fn(async () => notFound()),
     );
     const user = userEvent.setup();
-
     render(<App />);
 
     const email = await screen.findByRole("textbox", { name: "User Email" });
@@ -117,7 +116,6 @@ describe("Management App", () => {
         return notFound();
       }),
     );
-
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Links" })).toBeInTheDocument();
@@ -128,6 +126,105 @@ describe("Management App", () => {
     expect(within(row as HTMLElement).getByText("Active")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Link" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Users" })).not.toBeInTheDocument();
+  });
+
+  it("lets a Viewer inspect Instance analytics with approximate metric disclosure", async () => {
+    history.replaceState(null, "", "/analytics");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/api/internal/auth/session") return Response.json(viewerSession);
+        if (url.pathname === "/api/internal/analytics") {
+          expect(url.searchParams.get("granularity")).toBe("day");
+          expect(url.searchParams.get("limit")).toBe("10");
+          return Response.json({
+            ok: true,
+            summary: { humanClicks: 42, uniqueHumanClicks: 18, suspectedBotClicks: 3 },
+            series: [
+              {
+                bucket: "2026-08-09T00:00:00.000Z",
+                humanClicks: 42,
+                uniqueHumanClicks: 18,
+                suspectedBotClicks: 3,
+              },
+            ],
+            breakdowns: {
+              referrer: {
+                items: [
+                  {
+                    value: "news.example.com",
+                    humanClicks: 30,
+                    uniqueHumanClicks: 12,
+                    suspectedBotClicks: 0,
+                  },
+                ],
+                truncated: false,
+              },
+              country: {
+                items: [
+                  {
+                    value: "KR",
+                    humanClicks: 28,
+                    uniqueHumanClicks: 11,
+                    suspectedBotClicks: 0,
+                  },
+                ],
+                truncated: false,
+              },
+              device: {
+                items: [
+                  {
+                    value: "desktop",
+                    humanClicks: 24,
+                    uniqueHumanClicks: 10,
+                    suspectedBotClicks: 0,
+                  },
+                ],
+                truncated: false,
+              },
+              bot: { items: [], truncated: false },
+            },
+            topLinks: {
+              items: [
+                {
+                  id: "link-docs",
+                  alias: "Docs",
+                  shortUrl: "https://short.test/Docs",
+                  title: "Documentation",
+                  state: "active",
+                  humanClicks: 42,
+                  uniqueHumanClicks: 18,
+                  suspectedBotClicks: 3,
+                },
+              ],
+              truncated: false,
+            },
+          });
+        }
+        return notFound();
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Analytics" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Analytics" })).toBeVisible();
+    const summary = await screen.findByLabelText("Analytics summary");
+    expect(within(summary).getByText("42")).toBeVisible();
+    expect(within(summary).getByText("Unique Human Clicks")).toBeVisible();
+    expect(within(summary).getByText("Approximate")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open analytics for Documentation" })).toBeVisible();
+
+    await user.selectOptions(screen.getByLabelText("UTC date range"), "30d");
+    await user.click(screen.getByRole("button", { name: "Unique Human Clicks" }));
+    await user.click(screen.getByRole("checkbox", { name: "Include suspected bots" }));
+    await waitFor(() => {
+      expect(location.search).toContain("range=30d");
+      expect(location.search).toContain("metric=unique");
+      expect(location.search).toContain("bots=true");
+    });
   });
 
   it("redirects a Viewer who opens the create URL directly", async () => {
@@ -259,6 +356,62 @@ describe("Management App", () => {
     expect(await screen.findByRole("heading", { name: "Documentation" })).toBeInTheDocument();
     expect(location.pathname).toBe("/links/link-docs");
     expect(screen.getByText("https://short.test/Docs")).toBeVisible();
+  });
+
+  it("shows Link-wide analytics inside Link detail and preserves URL display state", async () => {
+    history.replaceState(null, "", "/links/link-docs?metric=unique&bots=true");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/api/internal/auth/session") return Response.json(viewerSession);
+        if (url.pathname === "/api/internal/links") {
+          return Response.json({ ok: true, items: [documentationLink], nextCursor: null });
+        }
+        if (url.pathname === "/api/internal/links/link-docs") {
+          return Response.json({ ok: true, link: documentationLink });
+        }
+        if (url.pathname.endsWith("/destination-versions")) {
+          return Response.json({ ok: true, items: [], nextCursor: null });
+        }
+        if (url.pathname === "/api/internal/links/link-docs/analytics") {
+          return Response.json({
+            ok: true,
+            summary: { humanClicks: 5, uniqueHumanClicks: 4, suspectedBotClicks: 1 },
+            series: [
+              {
+                bucket: "2026-08-09T00:00:00.000Z",
+                humanClicks: 5,
+                uniqueHumanClicks: 4,
+                suspectedBotClicks: 1,
+              },
+            ],
+            breakdowns: {
+              referrer: { items: [], truncated: false },
+              country: { items: [], truncated: false },
+              device: { items: [], truncated: false },
+              bot: { items: [], truncated: false },
+            },
+            topLinks: { items: [], truncated: false },
+          });
+        }
+        return notFound();
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Documentation" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Analytics" })).toBeVisible();
+    const summary = await screen.findByLabelText("Analytics summary");
+    expect(within(summary).getByText("5")).toBeVisible();
+    expect(within(summary).getByText("4")).toBeVisible();
+    expect(within(summary).getByText("1")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Unique Human Clicks" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("checkbox", { name: "Include suspected bots" })).toBeChecked();
   });
 
   it("explains an unsafe Link Destination before creation", async () => {

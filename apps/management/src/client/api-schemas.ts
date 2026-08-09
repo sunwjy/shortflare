@@ -98,3 +98,47 @@ export const deletedLinkResponseSchema = z.strictObject({
   ok: z.literal(true),
   reservedAlias: reservedAliasSchema,
 });
+
+const analyticsSummarySchema = z.strictObject({
+  humanClicks: z.number().int().nonnegative(),
+  uniqueHumanClicks: z.number().int().nonnegative(),
+  suspectedBotClicks: z.number().int().nonnegative(),
+});
+
+const analyticsBreakdownSchema = z.strictObject({
+  items: z.array(analyticsSummarySchema.extend({ value: z.string() })),
+  truncated: z.boolean(),
+});
+
+const analyticsFields = {
+  ok: z.literal(true),
+  summary: analyticsSummarySchema,
+  series: z.array(analyticsSummarySchema.extend({ bucket: z.string() })),
+  breakdowns: z.strictObject({
+    referrer: analyticsBreakdownSchema,
+    country: analyticsBreakdownSchema,
+    device: analyticsBreakdownSchema,
+    bot: analyticsBreakdownSchema,
+  }),
+};
+
+export const linkAnalyticsResponseSchema = z.strictObject({
+  ...analyticsFields,
+  topLinks: analyticsBreakdownSchema,
+});
+
+export const instanceAnalyticsResponseSchema = z.strictObject({
+  ...analyticsFields,
+  topLinks: z.strictObject({
+    items: z.array(
+      analyticsSummarySchema.extend({
+        id: z.string(),
+        alias: z.string(),
+        shortUrl: z.string(),
+        title: z.string(),
+        state: z.enum(["active", "disabled", "archived"]),
+      }),
+    ),
+    truncated: z.boolean(),
+  }),
+});

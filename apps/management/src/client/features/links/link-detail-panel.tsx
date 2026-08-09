@@ -16,6 +16,8 @@ import { useAppForm } from "../../components/form/app-form";
 import { destinationSchema, linkTitleSchema } from "../../components/form/form-schemas";
 import { Button } from "../../components/ui/button";
 import type { LinkDto } from "../../types";
+import { AnalyticsDashboard } from "../analytics/analytics-page";
+import { normalizeAnalyticsSearch } from "../analytics/analytics-range";
 import { linkMutationError } from "./create-link-panel";
 import { StatusChip } from "./link-presentation";
 import { SensitiveAliasDialog } from "./sensitive-alias-dialog";
@@ -30,6 +32,7 @@ export function LinkDetailPanel() {
   const { linkId } = linkDetailApi.useParams();
   const navigate = linkDetailApi.useNavigate();
   const search = linksApi.useSearch();
+  const detailSearch = linkDetailApi.useSearch();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [conflict, setConflict] = useState<LinkDto>();
@@ -160,7 +163,7 @@ export function LinkDetailPanel() {
 
   return (
     <aside
-      className="fixed inset-0 z-20 overflow-auto bg-card p-6 text-card-foreground shadow-2xl md:inset-y-0 md:right-0 md:left-auto md:w-full md:max-w-xl md:border-l"
+      className="fixed inset-0 z-20 overflow-auto bg-card p-6 text-card-foreground shadow-2xl md:inset-y-0 md:right-0 md:left-auto md:w-full md:max-w-4xl md:border-l"
       aria-label="Link detail"
     >
       {link.isPending && <p aria-busy="true">Loading Link…</p>}
@@ -293,6 +296,15 @@ export function LinkDetailPanel() {
                 >
                   {link.data.link.destination.url}
                 </a>
+              </section>
+              <section className="border-t py-5">
+                <h3 className="mb-4 text-sm font-semibold">Analytics</h3>
+                <AnalyticsDashboard
+                  endpoint={`/api/internal/links/${encodeURIComponent(linkId)}/analytics`}
+                  search={normalizeAnalyticsSearch(detailSearch)}
+                  onSearch={(next) => navigate({ search: { ...search, ...next } })}
+                  showTopLinks={false}
+                />
               </section>
               <section className="border-t py-5">
                 <h3 className="mb-3 text-sm font-semibold">Destination Versions</h3>
