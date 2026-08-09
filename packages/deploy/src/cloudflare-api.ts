@@ -38,6 +38,19 @@ export type CloudflareApi = Readonly<{
     sql: string,
     parameters?: readonly string[],
   ): Promise<CloudflareApiFailure | Readonly<{ ok: true; rows: readonly unknown[] }>>;
+  beginD1Export(
+    accountId: string,
+    databaseId: string,
+  ): Promise<CloudflareApiFailure | Readonly<{ ok: true; bookmark: string }>>;
+  pollD1Export(
+    accountId: string,
+    databaseId: string,
+    bookmark: string,
+  ): Promise<
+    | CloudflareApiFailure
+    | Readonly<{ ok: true; state: "pending" }>
+    | Readonly<{ ok: true; state: "ready"; downloadUrl: string }>
+  >;
   listQueues(
     accountId: string,
   ): Promise<CloudflareApiFailure | Readonly<{ ok: true; queues: readonly CloudflareQueue[] }>>;
@@ -66,6 +79,10 @@ const queueSchema = z.looseObject({
 const d1QuerySchema = z.looseObject({
   success: z.literal(true),
   results: z.array(z.unknown()).optional(),
+});
+const d1ExportSchema = z.looseObject({
+  at_bookmark: z.string().optional(),
+  signed_url: z.url().optional(),
 });
 
 export function createCloudflareApi(
@@ -151,6 +168,38 @@ export function createCloudflareApi(
       );
       if (!response.ok) return response;
       return { ok: true, rows: response.result[0]?.results ?? [] };
+    },
+
+    async beginD1Export(accountId, databaseId) {
+      const response = await request(
+        "POST",
+        `/accounts/${encodeURIComponent(accountId)}/d1/database/${encodeURIComponent(databaseId)}/export`,
+        d1ExportSchema,
+        { output_format: "polling" },
+      );
+      if (!response.ok) return response;
+      if (response.result.at_bookmark === undefined) {
+        return {
+          ok: false,
+          kind: "cloudflare-invalid-response",
+          status: 200,
+          retryable: false,
+        };
+      }
+      return { ok: true, bookmark: response.result.at_bookmark };
+    },
+
+    async pollD1Export(accountId, databaseId, bookmark) {
+      const response = await request(
+        "POST",
+        `/accounts/${encodeURIComponent(accountId)}/d1/database/${encodeURIComponent(databaseId)}/export`,
+        d1ExportSchema,
+        { current_bookmark: bookmark },
+      );
+      if (!response.ok) return response;
+      return response.result.signed_url === undefined
+        ? { ok: true, state: "pending" }
+        : { ok: true, state: "ready", downloadUrl: response.result.signed_url };
     },
 
     async listQueues(accountId) {

@@ -20,6 +20,7 @@ export {
   DeploymentLeaseConflictError,
 } from "./d1-deployment-journal.js";
 export type { D1DeploymentQuery } from "./d1-deployment-journal.js";
+export { writeD1Backup } from "./d1-backup.js";
 export { createDeploymentPlan } from "./deployment-plan.js";
 export type {
   CreateDeploymentPlanResult,
@@ -48,6 +49,7 @@ export {
 export type { InstanceConfig, ParseInstanceConfigResult } from "./local-instance-config.js";
 export { hashReleaseArtifact, verifyReleaseBundle } from "./release-bundle.js";
 export type { VerifyReleaseBundleResult } from "./release-bundle.js";
+export { prepareWorkerArtifacts } from "./resolved-worker-artifacts.js";
 export { parseReleaseManifest } from "./release-manifest.js";
 export type {
   ParseReleaseManifestResult,

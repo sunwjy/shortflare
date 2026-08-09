@@ -99,6 +99,36 @@ describe("Cloudflare REST control-plane adapter", () => {
     });
   });
 
+  it("starts and polls a portable D1 export", async () => {
+    const bodies: unknown[] = [];
+    const api = createCloudflareApi({
+      apiToken: "secret-token",
+      fetch: async (_input, init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return Response.json({
+          success: true,
+          errors: [],
+          messages: [],
+          result:
+            bodies.length === 1
+              ? { at_bookmark: "bookmark-1" }
+              : { signed_url: "https://backup.example/export.sql", filename: "export.sql" },
+        });
+      },
+    });
+
+    await expect(api.beginD1Export("account-1", "database-1")).resolves.toEqual({
+      ok: true,
+      bookmark: "bookmark-1",
+    });
+    await expect(api.pollD1Export("account-1", "database-1", "bookmark-1")).resolves.toEqual({
+      ok: true,
+      state: "ready",
+      downloadUrl: "https://backup.example/export.sql",
+    });
+    expect(bodies).toEqual([{ output_format: "polling" }, { current_bookmark: "bookmark-1" }]);
+  });
+
   it("returns a stable error without exposing credentials or raw responses", async () => {
     const api = createCloudflareApi({
       apiToken: "secret-token",
