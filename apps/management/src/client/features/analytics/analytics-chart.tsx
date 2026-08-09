@@ -92,7 +92,9 @@ export default function AnalyticsChart({
           <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b text-xs text-muted-foreground">
-                <th className="py-2 pr-4 font-medium">UTC bucket</th>
+                <th className="py-2 pr-4 font-medium">
+                  {granularity === "hour" ? "Browser time" : "UTC date"}
+                </th>
                 <th className="py-2 text-right font-medium">{metricLabel}</th>
               </tr>
             </thead>

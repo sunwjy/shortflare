@@ -13,15 +13,18 @@ import {
   type AnalyticsSearch,
 } from "./analytics-range";
 
-export function AnalyticsControls({
-  search,
-  onSearch,
-  onRefresh,
-}: Readonly<{
+type AnalyticsControlsProps = Readonly<{
   search: AnalyticsSearch;
   onSearch: (search: AnalyticsSearch) => void | Promise<void>;
   onRefresh: () => unknown;
-}>) {
+}>;
+
+export function AnalyticsControls(props: AnalyticsControlsProps) {
+  const draftKey = `${props.search.start ?? ""}:${props.search.end ?? ""}`;
+  return <AnalyticsControlsDraft key={draftKey} {...props} />;
+}
+
+function AnalyticsControlsDraft({ search, onSearch, onRefresh }: AnalyticsControlsProps) {
   const requestRange = analyticsRequestRange(search);
   const initialEnd = new Date(new Date(requestRange.end).getTime() - 86_400_000)
     .toISOString()

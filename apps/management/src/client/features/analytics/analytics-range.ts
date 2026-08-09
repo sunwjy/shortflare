@@ -110,7 +110,7 @@ function formatRangeLabel(start: Date, end: Date): string {
     return `${formatter.format(end)}, ${year} UTC`;
   }
   const sameMonth = start.getUTCFullYear() === year && start.getUTCMonth() === end.getUTCMonth();
-  const startLabel = sameMonth ? formatter.format(start) : formatter.format(start);
+  const startLabel = formatter.format(start);
   const endLabel = sameMonth ? String(end.getUTCDate()) : formatter.format(end);
   const startYear = start.getUTCFullYear() === year ? "" : `, ${start.getUTCFullYear()}`;
   return `${startLabel}${startYear}–${endLabel}, ${year} UTC`;

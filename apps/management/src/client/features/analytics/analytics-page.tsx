@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getRouteApi } from "@tanstack/react-router";
 
 import { jsonRequest } from "../../api";
-import { instanceAnalyticsResponseSchema } from "../../api-schemas";
+import { instanceAnalyticsResponseSchema, linkAnalyticsResponseSchema } from "../../api-schemas";
 import { AnalyticsControls } from "./analytics-controls";
 import { analyticsRequestRange, type AnalyticsSearch } from "./analytics-range";
 import { AnalyticsResults, AnalyticsSkeleton } from "./analytics-results";
@@ -23,8 +23,7 @@ export function AnalyticsPage() {
       <AnalyticsDashboard
         search={search}
         onSearch={(next) => navigate({ search: next })}
-        endpoint="/api/internal/analytics"
-        showTopLinks
+        scope={{ kind: "instance" }}
       />
     </div>
   );
@@ -33,25 +32,32 @@ export function AnalyticsPage() {
 export function AnalyticsDashboard({
   search,
   onSearch,
-  endpoint,
-  showTopLinks,
+  scope,
 }: Readonly<{
   search: AnalyticsSearch;
   onSearch: (search: AnalyticsSearch) => void | Promise<void>;
-  endpoint: string;
-  showTopLinks: boolean;
+  scope: { kind: "instance" } | { kind: "link"; linkId: string };
 }>) {
   const range = analyticsRequestRange(search);
+  const endpoint =
+    scope.kind === "instance"
+      ? "/api/internal/analytics"
+      : `/api/internal/links/${encodeURIComponent(scope.linkId)}/analytics`;
   const analytics = useQuery({
     queryKey: ["analytics", endpoint, range.start, range.end, range.granularity],
-    queryFn: () => {
+    queryFn: async () => {
       const parameters = new URLSearchParams({
         start: range.start,
         end: range.end,
         granularity: range.granularity,
         limit: "10",
       });
-      return jsonRequest(endpoint + "?" + parameters.toString(), instanceAnalyticsResponseSchema);
+      const url = endpoint + "?" + parameters.toString();
+      if (scope.kind === "instance") {
+        return jsonRequest(url, instanceAnalyticsResponseSchema);
+      }
+      const response = await jsonRequest(url, linkAnalyticsResponseSchema);
+      return { ...response, topLinks: undefined };
     },
     placeholderData: (previous) => previous,
     refetchOnWindowFocus: "always",
@@ -94,7 +100,6 @@ export function AnalyticsDashboard({
           showBots={search.bots === true}
           granularity={range.granularity}
           search={search}
-          showTopLinks={showTopLinks}
         />
       )}
     </div>

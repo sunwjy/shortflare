@@ -300,10 +300,9 @@ export function LinkDetailPanel() {
               <section className="border-t py-5">
                 <h3 className="mb-4 text-sm font-semibold">Analytics</h3>
                 <AnalyticsDashboard
-                  endpoint={`/api/internal/links/${encodeURIComponent(linkId)}/analytics`}
+                  scope={{ kind: "link", linkId }}
                   search={normalizeAnalyticsSearch(detailSearch)}
                   onSearch={(next) => navigate({ search: { ...search, ...next } })}
-                  showTopLinks={false}
                 />
               </section>
               <section className="border-t py-5">

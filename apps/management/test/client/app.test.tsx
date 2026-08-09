@@ -392,7 +392,17 @@ describe("Management App", () => {
               device: { items: [], truncated: false },
               bot: { items: [], truncated: false },
             },
-            topLinks: { items: [], truncated: false },
+            topLinks: {
+              items: [
+                {
+                  value: "link-docs",
+                  humanClicks: 5,
+                  uniqueHumanClicks: 4,
+                  suspectedBotClicks: 1,
+                },
+              ],
+              truncated: false,
+            },
           });
         }
         return notFound();
@@ -412,6 +422,46 @@ describe("Management App", () => {
       "true",
     );
     expect(screen.getByRole("checkbox", { name: "Include suspected bots" })).toBeChecked();
+  });
+
+  it("describes bot-only ranges accurately when suspected bots are shown", async () => {
+    history.replaceState(null, "", "/analytics");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input), location.origin);
+        if (url.pathname === "/api/internal/auth/session") return Response.json(viewerSession);
+        if (url.pathname === "/api/internal/analytics") {
+          return Response.json({
+            ok: true,
+            summary: { humanClicks: 0, uniqueHumanClicks: 0, suspectedBotClicks: 5 },
+            series: [
+              {
+                bucket: "2026-08-09T00:00:00.000Z",
+                humanClicks: 0,
+                uniqueHumanClicks: 0,
+                suspectedBotClicks: 5,
+              },
+            ],
+            breakdowns: {
+              referrer: { items: [], truncated: false },
+              country: { items: [], truncated: false },
+              device: { items: [], truncated: false },
+              bot: { items: [], truncated: false },
+            },
+            topLinks: { items: [], truncated: false },
+          });
+        }
+        return notFound();
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    expect(await screen.findByText("5 suspected bot Clicks are excluded.")).toBeVisible();
+    await user.click(screen.getByRole("checkbox", { name: "Include suspected bots" }));
+    expect(await screen.findByText("5 suspected bot Clicks are shown separately.")).toBeVisible();
   });
 
   it("explains an unsafe Link Destination before creation", async () => {

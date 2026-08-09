@@ -2,12 +2,16 @@ import { Link } from "@tanstack/react-router";
 import { lazy, Suspense } from "react";
 import type { z } from "zod";
 
-import { instanceAnalyticsResponseSchema } from "../../api-schemas";
+import { instanceAnalyticsResponseSchema, linkAnalyticsResponseSchema } from "../../api-schemas";
 import { StatusChip } from "../links/link-presentation";
 import type { AnalyticsMetric, AnalyticsSearch } from "./analytics-range";
 
 const AnalyticsChart = lazy(() => import("./analytics-chart"));
 type InstanceAnalytics = z.output<typeof instanceAnalyticsResponseSchema>;
+type LinkAnalytics = z.output<typeof linkAnalyticsResponseSchema>;
+type AnalyticsData =
+  | InstanceAnalytics
+  | (Omit<LinkAnalytics, "topLinks"> & { topLinks?: undefined });
 type Breakdown = InstanceAnalytics["breakdowns"]["referrer"];
 
 export function AnalyticsResults({
@@ -16,14 +20,12 @@ export function AnalyticsResults({
   showBots,
   granularity,
   search,
-  showTopLinks,
 }: Readonly<{
-  data: InstanceAnalytics;
+  data: AnalyticsData;
   metric: AnalyticsMetric;
   showBots: boolean;
   granularity: "hour" | "day";
   search: AnalyticsSearch;
-  showTopLinks: boolean;
 }>) {
   const noHumans = data.summary.humanClicks === 0;
   const chartTitle =
@@ -48,9 +50,10 @@ export function AnalyticsResults({
         <section className="rounded-xl border bg-card p-8 text-center">
           <h2 className="font-semibold">No Human Clicks in this UTC range</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            {data.summary.suspectedBotClicks > 0 && !showBots
-              ? data.summary.suspectedBotClicks.toLocaleString() +
-                " suspected bot Clicks are excluded."
+            {data.summary.suspectedBotClicks > 0
+              ? `${data.summary.suspectedBotClicks.toLocaleString()} suspected bot Clicks are ${
+                  showBots ? "shown separately" : "excluded"
+                }.`
               : "Click Events will appear after an Active Link redirects a GET request."}
           </p>
         </section>
@@ -74,7 +77,7 @@ export function AnalyticsResults({
           />
         </Suspense>
       )}
-      {showTopLinks && <TopLinks data={data.topLinks} search={search} />}
+      {data.topLinks && <TopLinks data={data.topLinks} search={search} />}
       <div className="grid gap-6 lg:grid-cols-3">
         <BreakdownPanel title="Where did Human Clicks come from?" data={data.breakdowns.referrer} />
         <BreakdownPanel title="Which countries sent Human Clicks?" data={data.breakdowns.country} />
