@@ -11,14 +11,20 @@ import { createLinksHttpRoutes } from "./modules/links/http/routes";
 import { handleUnexpectedError } from "./transport/error-handler";
 import { createManagementHono } from "./transport/factory";
 import type { RequestAuthentication } from "./transport/request-authentication";
+import {
+  createCloudflareRequestRateLimits,
+  createRequestRateLimitMiddleware,
+} from "./transport/request-rate-limits";
 import { applySecurityHeaders } from "./transport/security-headers";
 
 export function createManagementApp(dependencies: ManagementDependencies) {
   const app = createManagementHono();
+  const rateLimits = createRequestRateLimitMiddleware(dependencies);
 
   app.use("*", applySecurityHeaders);
   app.onError(handleUnexpectedError);
   app.get("/api/internal/health", (context) => context.json({ status: "ok" } as const));
+  app.use("/api/internal/*", rateLimits.requireManagementSource());
   app.route("/api/internal", createIdentityHttpRoutes(dependencies));
   app.route("/api/internal", createLinksHttpRoutes(dependencies));
   app.route("/api/internal", createAnalyticsHttpRoutes(dependencies));
@@ -37,6 +43,7 @@ const productionDependencies: ManagementDependencies = {
     }),
   createRequestAuthentication: (bindings) =>
     createRequestAuthentication(createIdentity({ db: bindings.DB })),
+  createRequestRateLimits: createCloudflareRequestRateLimits,
   hasCapability,
 };
 

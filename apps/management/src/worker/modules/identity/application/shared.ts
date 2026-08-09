@@ -31,7 +31,11 @@ export function parseUserEmail(value: string) {
   ) {
     return undefined;
   }
-  return { display, normalized: display.toLowerCase() };
+  return { display, normalized: normalizeUserEmail(display) };
+}
+
+export function normalizeUserEmail(value: string) {
+  return value.trim().toLowerCase();
 }
 
 export async function hashToken(token: string) {

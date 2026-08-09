@@ -38,6 +38,11 @@ it("serves Links HTTP through injected application and authentication ports", as
         throw new Error("Unexpected mutation authentication");
       },
     }),
+    createRequestRateLimits: () => ({
+      async limit() {
+        return true;
+      },
+    }),
     hasCapability: () => true,
   });
 

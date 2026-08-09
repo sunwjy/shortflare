@@ -71,6 +71,11 @@ describe("management app composition", () => {
           throw new Error("Unexpected mutation authentication");
         },
       }),
+      createRequestRateLimits: () => ({
+        async limit() {
+          return true;
+        },
+      }),
       hasCapability: () => true,
     });
 

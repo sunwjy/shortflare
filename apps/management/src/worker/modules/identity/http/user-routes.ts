@@ -9,6 +9,7 @@ import {
 import { createManagementHono } from "../../../transport/factory";
 import { parseJson } from "../../../transport/json";
 import { requireJsonRequestIntegrity } from "../../../transport/request-integrity";
+import { createRequestRateLimitMiddleware } from "../../../transport/request-rate-limits";
 import type { Identity } from "..";
 import { emptyRequest, invitationRequest, roleRequest } from "./schemas";
 
@@ -18,18 +19,21 @@ const presentAuthenticationFailure: AuthenticationFailurePresenter = (context, k
 export function createUserRoutes(
   dependencies: Pick<
     ManagementDependencies,
-    "createIdentity" | "createRequestAuthentication" | "hasCapability"
+    "createIdentity" | "createRequestAuthentication" | "createRequestRateLimits" | "hasCapability"
   >,
 ) {
   const userRoutes = createManagementHono();
   const authentication = createAuthenticationMiddleware(dependencies, presentAuthenticationFailure);
   const requireIntegrity = requireJsonRequestIntegrity(presentAuthenticationFailure);
+  const requirePrivilegedActor =
+    createRequestRateLimitMiddleware(dependencies).requirePrivilegedActor();
 
   userRoutes.post(
     "/invitations",
     requireIntegrity,
     authentication.requireMutationSession(),
     authentication.requireCapability("manage-users"),
+    requirePrivilegedActor,
     async (context) => {
       const request = await parseJson(context.req.raw, invitationRequest);
       if (!request) return invalidRequest(context);
@@ -61,6 +65,7 @@ export function createUserRoutes(
     requireIntegrity,
     authentication.requireMutationSession(),
     authentication.requireCapability("manage-users"),
+    requirePrivilegedActor,
     async (context) => {
       if (!(await parseEmptyRequest(context))) return invalidRequest(context);
       const result = await dependencies.createIdentity(context.env).invitations.cancelInvitation({
@@ -76,6 +81,7 @@ export function createUserRoutes(
     requireIntegrity,
     authentication.requireMutationSession(),
     authentication.requireCapability("manage-users"),
+    requirePrivilegedActor,
     async (context) => {
       if (!(await parseEmptyRequest(context))) return invalidRequest(context);
       const failure = authentication.ensureRecentAuthentication(context);
@@ -95,6 +101,7 @@ export function createUserRoutes(
     requireIntegrity,
     authentication.requireMutationSession(),
     authentication.requireCapability("manage-users"),
+    requirePrivilegedActor,
     async (context) => {
       const request = await parseJson(context.req.raw, roleRequest);
       if (!request) return invalidRequest(context);
@@ -113,6 +120,7 @@ export function createUserRoutes(
     requireIntegrity,
     authentication.requireMutationSession(),
     authentication.requireCapability("manage-users"),
+    requirePrivilegedActor,
     async (context) => {
       if (!(await parseEmptyRequest(context))) return invalidRequest(context);
       const result = await dependencies.createIdentity(context.env).users.suspendUser({
@@ -129,6 +137,7 @@ export function createUserRoutes(
     requireIntegrity,
     authentication.requireMutationSession(),
     authentication.requireCapability("manage-users"),
+    requirePrivilegedActor,
     async (context) => {
       if (!(await parseEmptyRequest(context))) return invalidRequest(context);
       const result = await dependencies.createIdentity(context.env).users.reactivateUser({

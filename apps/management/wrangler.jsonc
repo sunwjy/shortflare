@@ -7,6 +7,33 @@
   "vars": {
     "REDIRECT_DOMAIN": "short.localhost",
   },
+  "ratelimits": [
+    {
+      "name": "MANAGEMENT_SOURCE_RATE_LIMITER",
+      "namespace_id": "19001",
+      "simple": { "limit": 300, "period": 60 },
+    },
+    {
+      "name": "CREDENTIAL_SOURCE_RATE_LIMITER",
+      "namespace_id": "19002",
+      "simple": { "limit": 10, "period": 60 },
+    },
+    {
+      "name": "LOGIN_TARGET_RATE_LIMITER",
+      "namespace_id": "19003",
+      "simple": { "limit": 5, "period": 60 },
+    },
+    {
+      "name": "PRIVILEGED_ACTOR_RATE_LIMITER",
+      "namespace_id": "19004",
+      "simple": { "limit": 10, "period": 60 },
+    },
+    {
+      "name": "GENERAL_USER_RATE_LIMITER",
+      "namespace_id": "19005",
+      "simple": { "limit": 300, "period": 60 },
+    },
+  ],
   "d1_databases": [
     {
       "binding": "DB",

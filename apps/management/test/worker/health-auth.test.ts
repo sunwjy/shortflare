@@ -31,7 +31,7 @@ describe("management health and authentication", () => {
     const response = await app.request(
       "https://management.test/api/internal/links",
       { headers: { cookie: "__Host-shortflare_session=broken" } },
-      { DB: failingDatabase, REDIRECT_DOMAIN: "short.test" },
+      { ...env, DB: failingDatabase },
     );
 
     expect(response.status).toBe(500);

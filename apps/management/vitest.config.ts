@@ -21,6 +21,28 @@ export default defineConfig(async () => {
           },
           compatibilityDate: "2026-07-19",
           d1Databases: { DB: "shortflare-management-test" },
+          ratelimits: {
+            CREDENTIAL_SOURCE_RATE_LIMITER: {
+              namespace_id: "test-credential-source",
+              simple: { limit: 100_000, period: 60 },
+            },
+            GENERAL_USER_RATE_LIMITER: {
+              namespace_id: "test-general-user",
+              simple: { limit: 100_000, period: 60 },
+            },
+            LOGIN_TARGET_RATE_LIMITER: {
+              namespace_id: "test-login-target",
+              simple: { limit: 100_000, period: 60 },
+            },
+            MANAGEMENT_SOURCE_RATE_LIMITER: {
+              namespace_id: "test-management-source",
+              simple: { limit: 100_000, period: 60 },
+            },
+            PRIVILEGED_ACTOR_RATE_LIMITER: {
+              namespace_id: "test-privileged-actor",
+              simple: { limit: 100_000, period: 60 },
+            },
+          },
         },
       }),
     ],

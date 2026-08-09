@@ -7,6 +7,7 @@ import { createSessions } from "./application/sessions";
 import { createRandomToken } from "./application/shared";
 import { createUsers } from "./application/users";
 
+export { normalizeUserEmail } from "./application/shared";
 export type { User, UserRole, UserState } from "./application/shared";
 
 type IdentityOptions = Readonly<{

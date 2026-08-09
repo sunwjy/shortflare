@@ -72,6 +72,11 @@ describe("Management Analytics HTTP interface", () => {
           throw new Error("Unexpected mutation authentication");
         },
       }),
+      createRequestRateLimits: () => ({
+        async limit() {
+          return true;
+        },
+      }),
       hasCapability: (_user, capability) => capability === "view-analytics",
     });
 
