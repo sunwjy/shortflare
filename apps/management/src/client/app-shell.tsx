@@ -70,26 +70,7 @@ export function AppShell() {
             <ChartNoAxesCombined aria-hidden="true" size={20} strokeWidth={1.75} />
             Analytics
           </Link>
-          {session.user.role === "administrator" && (
-            <>
-              <Link
-                className={navigationLinkClass}
-                to="/users"
-                activeProps={{ "aria-current": "page" }}
-              >
-                <Users aria-hidden="true" size={20} strokeWidth={1.75} />
-                Users
-              </Link>
-              <Link
-                className={navigationLinkClass}
-                to="/audit"
-                activeProps={{ "aria-current": "page" }}
-              >
-                <ListChecks aria-hidden="true" size={20} strokeWidth={1.75} />
-                Audit
-              </Link>
-            </>
-          )}
+          {session.user.role === "administrator" && <AdministratorNavigation />}
           <Link
             className={navigationLinkClass}
             to="/security"
@@ -160,24 +141,7 @@ export function AppShell() {
             Analytics
           </Link>
           {session.user.role === "administrator" && (
-            <>
-              <Link
-                className={navigationLinkClass}
-                to="/users"
-                onClick={() => setMobileMenu(false)}
-              >
-                <Users aria-hidden="true" size={20} strokeWidth={1.75} />
-                Users
-              </Link>
-              <Link
-                className={navigationLinkClass}
-                to="/audit"
-                onClick={() => setMobileMenu(false)}
-              >
-                <ListChecks aria-hidden="true" size={20} strokeWidth={1.75} />
-                Audit
-              </Link>
-            </>
+            <AdministratorNavigation onNavigate={() => setMobileMenu(false)} />
           )}
           <Link className={navigationLinkClass} to="/security" onClick={() => setMobileMenu(false)}>
             <Shield aria-hidden="true" size={20} strokeWidth={1.75} />
@@ -191,6 +155,31 @@ export function AppShell() {
         </nav>
       </AppDialog>
     </div>
+  );
+}
+
+function AdministratorNavigation({ onNavigate }: Readonly<{ onNavigate?: () => void }>) {
+  return (
+    <>
+      <Link
+        className={navigationLinkClass}
+        to="/users"
+        activeProps={{ "aria-current": "page" }}
+        onClick={onNavigate}
+      >
+        <Users aria-hidden="true" size={20} strokeWidth={1.75} />
+        Users
+      </Link>
+      <Link
+        className={navigationLinkClass}
+        to="/audit"
+        activeProps={{ "aria-current": "page" }}
+        onClick={onNavigate}
+      >
+        <ListChecks aria-hidden="true" size={20} strokeWidth={1.75} />
+        Audit
+      </Link>
+    </>
   );
 }
 
