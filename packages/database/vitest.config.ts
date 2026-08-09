@@ -15,7 +15,10 @@ export default defineConfig(async () => {
         miniflare: {
           bindings: { TEST_MIGRATIONS: migrations },
           compatibilityDate: "2026-07-19",
-          d1Databases: { DB: "shortflare-database-test" },
+          d1Databases: {
+            DB: "shortflare-database-test",
+            UPGRADE_DB: "shortflare-database-upgrade-test",
+          },
         },
       }),
     ],

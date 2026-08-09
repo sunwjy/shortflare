@@ -1,5 +1,6 @@
 import { app } from "./app";
 import { consumeAnalytics } from "./analytics-queue";
+import { expireAnalytics } from "./analytics-retention";
 import type { ManagementBindings } from "./environment";
 
 export { app };
@@ -10,6 +11,9 @@ export const worker = {
   },
   async queue(batch: MessageBatch<unknown>, bindings: ManagementBindings) {
     await consumeAnalytics(batch, bindings);
+  },
+  async scheduled(controller: ScheduledController, bindings: ManagementBindings) {
+    await expireAnalytics(bindings, controller.scheduledTime);
   },
 };
 
