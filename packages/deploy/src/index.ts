@@ -8,6 +8,13 @@ export type {
   RecoverCommand,
   RecoveryAction,
 } from "./cli-contract.js";
+export { createCloudflareApi } from "./cloudflare-api.js";
+export type {
+  CloudflareApi,
+  CloudflareApiFailure,
+  CloudflareQueue,
+  D1Database,
+} from "./cloudflare-api.js";
 export { createDeploymentPlan } from "./deployment-plan.js";
 export type {
   CreateDeploymentPlanResult,

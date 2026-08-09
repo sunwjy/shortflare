@@ -10,8 +10,13 @@ export type DeploymentAttemptJournal = Readonly<{
     Readonly<{
       attemptId: string;
       completedActionIndexes: readonly number[];
+      fencingToken: number;
     }>
   >;
+  revalidateAndRenewLease(
+    attemptId: string,
+    fencingToken: number,
+  ): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false }>>;
   recordActionCompleted(attemptId: string, actionIndex: number): Promise<void>;
   complete(attemptId: string): Promise<void>;
   fail(attemptId: string, failure: DeploymentFailure): Promise<void>;
@@ -34,7 +39,7 @@ export type DeploymentActionExecutor = Readonly<{
 export type DeploymentRecovery = "approve-plan-digest" | "regenerate-plan" | "rerun-deploy";
 
 export type DeploymentFailure = Readonly<{
-  kind: "approval-required" | "deployment-drift" | "cloudflare-transient";
+  kind: "approval-required" | "deployment-drift" | "lease-lost" | "cloudflare-transient";
   stage: string;
   retryable: boolean;
   recovery: DeploymentRecovery;
@@ -89,7 +94,12 @@ export async function runDeploymentPlan(
 
   const attempt = await input.journal.begin(input.plan);
   const completedIndexes = new Set(attempt.completedActionIndexes);
-  const failed = await runPendingActions(input, attempt.attemptId, completedIndexes);
+  const failed = await runPendingActions(
+    input,
+    attempt.attemptId,
+    attempt.fencingToken,
+    completedIndexes,
+  );
   if (failed !== null) return failed;
 
   await input.journal.complete(attempt.attemptId);
@@ -108,13 +118,26 @@ async function runPendingActions(
     executor: DeploymentActionExecutor;
   }>,
   attemptId: string,
+  fencingToken: number,
   completedIndexes: ReadonlySet<number>,
   actionIndex = 0,
 ): Promise<RunDeploymentPlanResult | null> {
   const action = input.plan.actions[actionIndex];
   if (action === undefined) return null;
   if (completedIndexes.has(actionIndex)) {
-    return runPendingActions(input, attemptId, completedIndexes, actionIndex + 1);
+    return runPendingActions(input, attemptId, fencingToken, completedIndexes, actionIndex + 1);
+  }
+
+  const lease = await input.journal.revalidateAndRenewLease(attemptId, fencingToken);
+  if (!lease.ok) {
+    const deploymentFailure: DeploymentFailure = {
+      kind: "lease-lost",
+      stage: action.kind,
+      retryable: false,
+      recovery: "regenerate-plan",
+    };
+    await input.journal.fail(attemptId, deploymentFailure);
+    return failure(3, deploymentFailure, attemptId, input.plan.digest);
   }
 
   const precondition = await input.executor.revalidate(action, input.plan);
@@ -142,7 +165,7 @@ async function runPendingActions(
   }
 
   await input.journal.recordActionCompleted(attemptId, actionIndex);
-  return runPendingActions(input, attemptId, completedIndexes, actionIndex + 1);
+  return runPendingActions(input, attemptId, fencingToken, completedIndexes, actionIndex + 1);
 }
 
 function isApproved(plan: DeploymentPlan, approval: DeploymentApproval): boolean {

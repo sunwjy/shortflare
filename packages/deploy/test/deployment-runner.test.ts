@@ -15,7 +15,11 @@ describe("Deployment Plan runner", () => {
       journal: {
         async begin() {
           calls.push("begin");
-          return { attemptId: "attempt-1", completedActionIndexes: [0] };
+          return { attemptId: "attempt-1", completedActionIndexes: [0], fencingToken: 7 };
+        },
+        async revalidateAndRenewLease(attemptId, fencingToken) {
+          calls.push(`lease:${attemptId}:${fencingToken}`);
+          return { ok: true };
         },
         async recordActionCompleted(attemptId, actionIndex) {
           calls.push(`record:${attemptId}:${actionIndex}`);
@@ -51,9 +55,11 @@ describe("Deployment Plan runner", () => {
     });
     expect(calls).toEqual([
       "begin",
+      "lease:attempt-1:7",
       "check:upload-worker",
       "apply:upload-worker",
       "record:attempt-1:1",
+      "lease:attempt-1:7",
       "check:record-coherent-release",
       "apply:record-coherent-release",
       "record:attempt-1:2",
@@ -72,7 +78,10 @@ describe("Deployment Plan runner", () => {
       dryRun: false,
       journal: {
         async begin() {
-          return { attemptId: "attempt-2", completedActionIndexes: [] };
+          return { attemptId: "attempt-2", completedActionIndexes: [], fencingToken: 8 };
+        },
+        async revalidateAndRenewLease() {
+          return { ok: true };
         },
         async recordActionCompleted() {},
         async complete() {},
@@ -109,6 +118,42 @@ describe("Deployment Plan runner", () => {
     expect(failures).toEqual(["upload-worker"]);
   });
 
+  it("stops before an external effect after losing the fencing token", async () => {
+    let applied = false;
+    const result = await runDeploymentPlan({
+      plan: deploymentPlan(),
+      approval: { kind: "non-destructive" },
+      dryRun: false,
+      journal: {
+        async begin() {
+          return { attemptId: "attempt-lost", completedActionIndexes: [], fencingToken: 9 };
+        },
+        async revalidateAndRenewLease() {
+          return { ok: false };
+        },
+        async recordActionCompleted() {},
+        async complete() {},
+        async fail() {},
+      },
+      executor: {
+        async revalidate() {
+          return { ok: true };
+        },
+        async apply() {
+          applied = true;
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      exitCode: 3,
+      error: { kind: "lease-lost", recovery: "regenerate-plan" },
+    });
+    expect(applied).toBe(false);
+  });
+
   it("rejects stale or insufficient approval before opening an attempt", async () => {
     let began = false;
     const result = await runDeploymentPlan({
@@ -118,7 +163,10 @@ describe("Deployment Plan runner", () => {
       journal: {
         async begin() {
           began = true;
-          return { attemptId: "never", completedActionIndexes: [] };
+          return { attemptId: "never", completedActionIndexes: [], fencingToken: 1 };
+        },
+        async revalidateAndRenewLease() {
+          return { ok: true };
         },
         async recordActionCompleted() {},
         async complete() {},
@@ -158,7 +206,10 @@ describe("Deployment Plan runner", () => {
       journal: {
         async begin() {
           mutated = true;
-          return { attemptId: "never", completedActionIndexes: [] };
+          return { attemptId: "never", completedActionIndexes: [], fencingToken: 1 };
+        },
+        async revalidateAndRenewLease() {
+          return { ok: true };
         },
         async recordActionCompleted() {},
         async complete() {},
