@@ -222,6 +222,14 @@ export function createLinks(options: CreateLinksOptions): Links {
       return attemptCreate(0);
     },
     async query(query) {
+      if (query.kind === "summaries") {
+        return {
+          ok: true,
+          kind: "summaries",
+          items: await options.persistence.findSummariesByIds(query.linkIds),
+        };
+      }
+
       if (query.kind === "detail") {
         const link = await options.persistence.findById(query.linkId);
         return link === null

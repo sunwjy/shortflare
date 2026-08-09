@@ -1,9 +1,11 @@
-import { createD1LinksPersistence } from "@shortflare/database";
+import { createAnalytics } from "@shortflare/analytics";
+import { createD1AnalyticsPersistence, createD1LinksPersistence } from "@shortflare/database";
 import { createLinks } from "@shortflare/links";
 
 import { hasCapability } from "./access-control";
 import type { ManagementDependencies } from "./dependencies";
 import { createIdentity, type Identity } from "./modules/identity";
+import { createAnalyticsHttpRoutes } from "./modules/analytics/http/routes";
 import { createIdentityHttpRoutes } from "./modules/identity/http/routes";
 import { createLinksHttpRoutes } from "./modules/links/http/routes";
 import { handleUnexpectedError } from "./transport/error-handler";
@@ -19,11 +21,14 @@ export function createManagementApp(dependencies: ManagementDependencies) {
   app.get("/api/internal/health", (context) => context.json({ status: "ok" } as const));
   app.route("/api/internal", createIdentityHttpRoutes(dependencies));
   app.route("/api/internal", createLinksHttpRoutes(dependencies));
+  app.route("/api/internal", createAnalyticsHttpRoutes(dependencies));
 
   return app;
 }
 
 const productionDependencies: ManagementDependencies = {
+  createAnalytics: (bindings) =>
+    createAnalytics({ persistence: createD1AnalyticsPersistence(bindings.DB) }),
   createIdentity: (bindings) => createIdentity({ db: bindings.DB }),
   createLinks: (bindings) =>
     createLinks({

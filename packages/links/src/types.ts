@@ -166,6 +166,7 @@ export type RedirectDecision =
 
 export type LinkQuery =
   | Readonly<{ kind: "detail"; linkId: string }>
+  | Readonly<{ kind: "summaries"; linkIds: readonly string[] }>
   | Readonly<{
       kind: "destination-versions";
       linkId: string;
@@ -204,6 +205,7 @@ export type ReservedAliasPage = Readonly<{
 
 export type LinkQueryResult =
   | Readonly<{ ok: true; kind: "detail"; link: Link }>
+  | Readonly<{ ok: true; kind: "summaries"; items: readonly LinkSummary[] }>
   | Readonly<{ ok: true; kind: "page"; page: LinkPage }>
   | Readonly<{
       ok: true;

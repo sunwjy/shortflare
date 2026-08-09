@@ -1,6 +1,7 @@
 import type { User, UserRole } from "../modules/identity";
 
 export type Capability =
+  | "view-analytics"
   | "manage-links"
   | "delete-links"
   | "manage-reserved-aliases"
@@ -9,14 +10,15 @@ export type Capability =
 
 const capabilitiesByRole: Readonly<Record<UserRole, ReadonlySet<Capability>>> = {
   administrator: new Set([
+    "view-analytics",
     "manage-links",
     "delete-links",
     "manage-reserved-aliases",
     "manage-users",
     "view-users",
   ]),
-  member: new Set(["manage-links"]),
-  viewer: new Set(),
+  member: new Set(["view-analytics", "manage-links"]),
+  viewer: new Set(["view-analytics"]),
 };
 
 export function hasCapability(user: User, capability: Capability) {

@@ -6,6 +6,7 @@ import type {
   Link,
   LinkCommand,
   LinkPage,
+  LinkSummary,
   LinkState,
   ReservedAlias,
   ReservedAliasPage,
@@ -55,6 +56,7 @@ export type LinksPersistence = {
   ): Promise<"created" | "alias-in-use" | "alias-reserved">;
   findByAlias(alias: Alias): Promise<Link | null>;
   findById(id: string): Promise<Link | null>;
+  findSummariesByIds(ids: readonly string[]): Promise<readonly LinkSummary[]>;
   findReservedAlias(alias: Alias): Promise<ReservedAlias | null>;
   transitionState(
     linkId: string,

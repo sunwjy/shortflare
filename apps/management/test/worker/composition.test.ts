@@ -48,6 +48,9 @@ describe("management app composition", () => {
       },
     };
     const testApp = createManagementApp({
+      createAnalytics: () => {
+        throw new Error("Links HTTP must not create Analytics");
+      },
       createIdentity: () => {
         throw new Error("Links HTTP must not create Identity directly");
       },

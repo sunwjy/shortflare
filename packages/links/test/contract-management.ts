@@ -126,6 +126,46 @@ export function registerLinkManagementContract(
     });
   });
 
+  it("queries Link summaries by ranked IDs without hiding Archived Links", async () => {
+    const links = createTestLinks();
+    const first = await links.execute(
+      {
+        kind: "create",
+        alias: "First",
+        destination: "https://example.com/first",
+        title: "First Link",
+      },
+      actor,
+    );
+    const archived = await links.execute(
+      {
+        kind: "create",
+        alias: "Archived",
+        destination: "https://example.com/archived",
+        title: "Archived Link",
+      },
+      actor,
+    );
+    if (!first.ok || first.kind !== "link" || !archived.ok || archived.kind !== "link") {
+      throw new Error("expected Link creation to succeed");
+    }
+    await links.execute({ kind: "archive", linkId: archived.link.id, expectedRevision: 0 }, actor);
+
+    await expect(
+      links.query(
+        { kind: "summaries", linkIds: [archived.link.id, "missing", first.link.id] },
+        actor,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      kind: "summaries",
+      items: [
+        { id: archived.link.id, state: "archived" },
+        { id: first.link.id, state: "active" },
+      ],
+    });
+  });
+
   it("edits a Link title unless the Link is Archived", async () => {
     const links = createTestLinks();
     const created = await links.execute(
