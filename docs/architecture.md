@@ -307,14 +307,38 @@ but requires a detail refetch for current data.
    granularity. Results support Instance, Link, and Destination Version scopes,
    return zero-filled time buckets, and return only identifiers and analytics
    values. Display data is composed through Links by the Management adapter.
-10. UI date ranges are stored and queried in UTC, then rendered in the browser's
-    time zone.
+10. UI date ranges are stored and queried as inclusive UTC calendar dates. The
+    transport converts the inclusive end date to the exclusive end of the
+    module's half-open range. Hourly timestamps render in the browser's time
+    zone, while Daily Rollup labels retain their UTC calendar date so they do
+    not appear to move to another day.
 
 The default dashboard excludes suspected bots and reports Human Clicks and
 30-minute Unique Human Clicks separately. Bot classification and uniqueness are
 approximate and must be described as such in the UI. Hourly and daily Unique
 Human Clicks sum half-hour counts; Instance totals sum Link-level counts rather
 than correlating a person across Links.
+
+The read-only MVP Management transport exposes two explicit analytics
+resources:
+
+- `GET /api/internal/analytics` for the Instance; and
+- `GET /api/internal/links/:linkId/analytics` for one Link.
+
+Both require an authenticated User with the `view-analytics` capability and
+accept only aligned `start`, `end`, `granularity`, and `limit` query values. The
+transport rejects future ranges and ranges longer than 366 UTC dates. It does
+not expose a generic scope selector or Destination Version analytics. Instance
+results enrich the ten highest-ranked Link IDs through one Links module batch
+query so clients do not issue one request per Link.
+
+The Management UI keeps Links as the signed-in landing page and adds a separate
+Analytics route for the Instance. Link-wide analytics appear inside Link detail;
+Destination Version analytics and Analytics maintenance commands remain outside
+this slice. The default range is the seven UTC dates ending today. Today uses
+hourly granularity; seven-, 30-, 90-day, and custom ranges use daily
+granularity, with custom ranges limited to 366 dates. Date range, selected
+metric, and suspected-bot visibility are URL state.
 
 ## Modules, interfaces, and seams
 
