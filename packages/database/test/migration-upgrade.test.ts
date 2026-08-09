@@ -3,9 +3,9 @@ import { applyD1Migrations } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 describe("previous-release D1 upgrade", () => {
-  it("preserves Audit Events while adding the browsing indexes", async () => {
+  it("preserves business data while adding Deployment Control", async () => {
     const migration = env.TEST_MIGRATIONS.at(-1);
-    expect(migration?.name).toBe("0004_acoustic_nocturne.sql");
+    expect(migration?.name).toBe("0005_deployment_control.sql");
     await env.UPGRADE_DB.prepare(
       `INSERT INTO audit_events
          (id, actor_id, action, subject_id, occurred_at, metadata)
@@ -16,15 +16,15 @@ describe("previous-release D1 upgrade", () => {
 
     const rows = await env.UPGRADE_DB.prepare("SELECT id FROM audit_events").all<{ id: string }>();
     expect(rows.results).toEqual([{ id: "audit-before-upgrade" }]);
-    const indexes = await env.UPGRADE_DB.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'audit_events' ORDER BY name",
+    const tables = await env.UPGRADE_DB.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name LIKE 'deployment_%'
+       ORDER BY name`,
     ).all<{ name: string }>();
-    expect(indexes.results.map(({ name }) => name)).toEqual([
-      "audit_events_action_idx",
-      "audit_events_actor_idx",
-      "audit_events_occurred_at_idx",
-      "audit_events_subject_idx",
-      "sqlite_autoindex_audit_events_1",
+    expect(tables.results.map(({ name }) => name)).toEqual([
+      "deployment_attempts",
+      "deployment_lease",
+      "deployment_marker",
     ]);
   });
 });

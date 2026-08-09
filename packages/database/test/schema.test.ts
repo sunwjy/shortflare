@@ -13,6 +13,67 @@ describe("fresh D1 migration", () => {
     expect(instances.results).toEqual([{ singletonKey: 1 }]);
   });
 
+  it("constrains Deployment Control to one immutable marker and coherent release", async () => {
+    await env.DB.prepare(
+      `INSERT INTO deployment_marker
+         (singleton_key, instance_id, installation_release, created_at)
+       VALUES (1, 'instance-1', '1.0.0', 1)`,
+    ).run();
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO deployment_marker
+           (singleton_key, instance_id, installation_release, created_at)
+         VALUES (2, 'instance-2', '1.0.0', 1)`,
+      ).run(),
+    ).rejects.toThrow();
+    await expect(
+      env.DB.prepare("UPDATE deployment_marker SET instance_id = 'instance-2'").run(),
+    ).rejects.toThrow();
+
+    await env.DB.prepare(
+      `INSERT INTO coherent_release
+         (singleton_key, release, schema_version, management_worker_version,
+          redirect_worker_version, manifest_sha256, recorded_at)
+       VALUES (1, '1.0.0', 5, 'management-v1', 'redirect-v1', ?, 2)`,
+    )
+      .bind("a".repeat(64))
+      .run();
+    await expect(
+      env.DB.prepare(
+        `UPDATE coherent_release SET manifest_sha256 = 'not-a-digest' WHERE singleton_key = 1`,
+      ).run(),
+    ).rejects.toThrow();
+  });
+
+  it("records resumable attempts behind a singleton fenced lease", async () => {
+    await env.DB.prepare(
+      `INSERT INTO deployment_attempts
+         (id, plan_digest, source_release, target_release, status,
+          completed_actions, started_at, updated_at)
+       VALUES ('attempt-1', ?, 'fresh', '1.0.0', 'running', '[0,1]', 1, 1)`,
+    )
+      .bind("a".repeat(64))
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO deployment_lease
+         (singleton_key, attempt_id, expires_at, fencing_token)
+       VALUES (1, 'attempt-1', 1000, 1)`,
+    ).run();
+
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO deployment_lease
+           (singleton_key, attempt_id, expires_at, fencing_token)
+         VALUES (2, 'attempt-1', 1000, 2)`,
+      ).run(),
+    ).rejects.toThrow();
+    await expect(
+      env.DB.prepare(
+        "UPDATE deployment_attempts SET completed_actions = 'not-json' WHERE id = 'attempt-1'",
+      ).run(),
+    ).rejects.toThrow();
+  });
+
   it("keeps case-distinct Aliases while rejecting invalid characters", async () => {
     await insertLink("link-upper");
     await insertLink("link-lower");

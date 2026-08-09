@@ -1,6 +1,12 @@
 export { auditEvents, type AuditMetadata } from "./audit";
 export { analyticsEvents, analyticsRollups, analyticsUniques } from "./analytics";
 export {
+  coherentRelease,
+  deploymentAttempts,
+  deploymentLease,
+  deploymentMarker,
+} from "./deployment-control";
+export {
   credentials,
   initialSetup,
   instances,
