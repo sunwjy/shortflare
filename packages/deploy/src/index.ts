@@ -34,6 +34,8 @@ export {
   writeInstanceConfig,
 } from "./local-instance-config";
 export type { InstanceConfig, ParseInstanceConfigResult } from "./local-instance-config";
+export { hashReleaseArtifact, verifyReleaseBundle } from "./release-bundle";
+export type { VerifyReleaseBundleResult } from "./release-bundle";
 export { parseReleaseManifest } from "./release-manifest";
 export type {
   ParseReleaseManifestResult,
