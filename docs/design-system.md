@@ -520,13 +520,42 @@ The default analytics view prioritizes:
 Chart rules:
 
 - primary time series uses the Flare color;
+- one selector switches the primary series between Human Clicks and Unique
+  Human Clicks, with Human Clicks selected by default;
+- Unique Human Clicks always carry an `Approximate` label or adjacent
+  explanation and are never shortened to `Unique` or described as visitors;
 - suspected bots are excluded by default and the scope is visible;
+- including suspected bots adds a separate summary and compact time series; it
+  never adds them to Human Clicks, Unique Human Clicks, top-Link rankings, or
+  Referrer Domain, Country, and Device Category breakdowns;
 - every chart supports a readable table representation;
 - legends use direct labels where possible;
 - zero is included for count charts unless a clear analytical reason says
   otherwise;
 - tooltips are keyboard reachable;
 - color is never the only series differentiator.
+
+The Instance route is `/analytics`; Link-wide analytics occupy the third section
+of `/links/:linkId`. Links remains the signed-in landing page for every role.
+Analytics navigation is available to Administrators, Members, and Viewers.
+
+Date controls offer Today and seven-, 30-, and 90-day UTC presets plus an
+inclusive custom UTC range of at most 366 dates. Filters visibly say `UTC`.
+Hourly tooltips use the browser's time zone and Daily Rollup labels retain the
+UTC date. The default seven-day range, Human Clicks metric, and excluded-bot
+state are omitted from URL parameters; non-default state is shareable.
+
+Top Links include Active, Disabled, and Archived Links with their state labels
+and rank the first ten by Human Clicks. Referrer Domain, Country, and Device
+Category breakdowns also show the first ten by Human Clicks and use Unique Human
+Clicks only as a supporting value. When more values exist, say that additional
+values are not shown rather than inventing an `Other` aggregate.
+
+Empty states distinguish no Click Events from a range containing only excluded
+Suspected Bot Clicks. A refresh control shows the last successful fetch time;
+the view also refreshes on entry, filter changes, and browser focus without
+polling. A failed refresh preserves previously loaded data and shows a warning,
+while an initial failure replaces the content with an error state.
 
 ## Motion
 

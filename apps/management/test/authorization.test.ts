@@ -7,10 +7,17 @@ describe("authorization", () => {
   it.each([
     [
       "administrator",
-      ["manage-links", "delete-links", "manage-reserved-aliases", "manage-users", "view-users"],
+      [
+        "view-analytics",
+        "manage-links",
+        "delete-links",
+        "manage-reserved-aliases",
+        "manage-users",
+        "view-users",
+      ],
     ],
-    ["member", ["manage-links"]],
-    ["viewer", []],
+    ["member", ["view-analytics", "manage-links"]],
+    ["viewer", ["view-analytics"]],
   ] satisfies ReadonlyArray<readonly [UserRole, readonly Capability[]]>)(
     "maps %s to its capabilities",
     (role, expected) => {
@@ -23,6 +30,7 @@ describe("authorization", () => {
       };
 
       for (const capability of [
+        "view-analytics",
         "manage-links",
         "delete-links",
         "manage-reserved-aliases",

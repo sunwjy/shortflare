@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsersRouteImport } from './routes/users'
 import { Route as SecurityRouteImport } from './routes/security'
 import { Route as LinksRouteImport } from './routes/links'
+import { Route as AnalyticsRouteImport } from './routes/analytics'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LinksNewRouteImport } from './routes/links.new'
 import { Route as LinksLinkIdRouteImport } from './routes/links.$linkId'
@@ -29,6 +30,11 @@ const SecurityRoute = SecurityRouteImport.update({
 const LinksRoute = LinksRouteImport.update({
   id: '/links',
   path: '/links',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AnalyticsRoute = AnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -49,6 +55,7 @@ const LinksLinkIdRoute = LinksLinkIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/analytics': typeof AnalyticsRoute
   '/links': typeof LinksRouteWithChildren
   '/security': typeof SecurityRoute
   '/users': typeof UsersRoute
@@ -57,6 +64,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/analytics': typeof AnalyticsRoute
   '/links': typeof LinksRouteWithChildren
   '/security': typeof SecurityRoute
   '/users': typeof UsersRoute
@@ -66,6 +74,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/analytics': typeof AnalyticsRoute
   '/links': typeof LinksRouteWithChildren
   '/security': typeof SecurityRoute
   '/users': typeof UsersRoute
@@ -75,12 +84,26 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/links' | '/security' | '/users' | '/links/$linkId' | '/links/new'
+    | '/'
+    | '/analytics'
+    | '/links'
+    | '/security'
+    | '/users'
+    | '/links/$linkId'
+    | '/links/new'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/links' | '/security' | '/users' | '/links/$linkId' | '/links/new'
+  to:
+    | '/'
+    | '/analytics'
+    | '/links'
+    | '/security'
+    | '/users'
+    | '/links/$linkId'
+    | '/links/new'
   id:
     | '__root__'
     | '/'
+    | '/analytics'
     | '/links'
     | '/security'
     | '/users'
@@ -90,6 +113,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AnalyticsRoute: typeof AnalyticsRoute
   LinksRoute: typeof LinksRouteWithChildren
   SecurityRoute: typeof SecurityRoute
   UsersRoute: typeof UsersRoute
@@ -116,6 +140,13 @@ declare module '@tanstack/react-router' {
       path: '/links'
       fullPath: '/links'
       preLoaderRoute: typeof LinksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/analytics': {
+      id: '/analytics'
+      path: '/analytics'
+      fullPath: '/analytics'
+      preLoaderRoute: typeof AnalyticsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -156,6 +187,7 @@ const LinksRouteWithChildren = LinksRoute._addFileChildren(LinksRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AnalyticsRoute: AnalyticsRoute,
   LinksRoute: LinksRouteWithChildren,
   SecurityRoute: SecurityRoute,
   UsersRoute: UsersRoute,

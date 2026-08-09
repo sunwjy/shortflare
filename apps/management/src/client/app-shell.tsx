@@ -1,5 +1,5 @@
 import { getRouteApi, Link, Outlet } from "@tanstack/react-router";
-import { Link2, LogOut, Menu, Shield, Users } from "lucide-react";
+import { ChartNoAxesCombined, Link2, LogOut, Menu, Shield, Users } from "lucide-react";
 import { useState } from "react";
 
 import { noContentRequest } from "./api";
@@ -61,6 +61,14 @@ export function AppShell() {
           >
             <Link2 aria-hidden="true" size={20} strokeWidth={1.75} />
             Links
+          </Link>
+          <Link
+            className={navigationLinkClass}
+            to="/analytics"
+            activeProps={{ "aria-current": "page" }}
+          >
+            <ChartNoAxesCombined aria-hidden="true" size={20} strokeWidth={1.75} />
+            Analytics
           </Link>
           {session.user.role === "administrator" && (
             <Link
@@ -132,6 +140,14 @@ export function AppShell() {
           >
             <Link2 aria-hidden="true" size={20} strokeWidth={1.75} />
             Links
+          </Link>
+          <Link
+            className={navigationLinkClass}
+            to="/analytics"
+            onClick={() => setMobileMenu(false)}
+          >
+            <ChartNoAxesCombined aria-hidden="true" size={20} strokeWidth={1.75} />
+            Analytics
           </Link>
           {session.user.role === "administrator" && (
             <Link className={navigationLinkClass} to="/users" onClick={() => setMobileMenu(false)}>

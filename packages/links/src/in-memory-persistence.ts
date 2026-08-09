@@ -34,6 +34,12 @@ export function createInMemoryLinksPersistence(): LinksPersistence {
       const link = linksById.get(id);
       return link === undefined ? null : currentLinkSnapshot(link);
     },
+    async findSummariesByIds(ids) {
+      return ids.flatMap((id) => {
+        const link = linksById.get(id);
+        return link === undefined ? [] : [structuredClone(linkSummary(link))];
+      });
+    },
     async findReservedAlias(alias) {
       const reservedAlias = reservedAliases.get(alias);
       return reservedAlias === undefined ? null : structuredClone(reservedAlias);
@@ -157,22 +163,7 @@ export function createInMemoryLinksPersistence(): LinksPersistence {
                   compareCaseSensitive(link.id, query.cursor!.id) > 0),
             );
       const pageLinks = afterCursor.slice(0, query.limit);
-      const items = pageLinks.map((link) => {
-        const currentDestinationVersion = link.destinationVersions.at(-1);
-        if (currentDestinationVersion === undefined) {
-          throw new Error(`Link ${link.id} has no Destination Version`);
-        }
-        return {
-          id: link.id,
-          alias: link.alias,
-          title: link.title,
-          state: link.state,
-          revision: link.revision,
-          currentDestinationVersion,
-          createdAt: link.createdAt,
-          updatedAt: link.updatedAt,
-        };
-      });
+      const items = pageLinks.map(linkSummary);
       const hasMore = pageLinks.length < afterCursor.length;
       const lastItem = items.at(-1);
 
@@ -252,4 +243,21 @@ function currentLinkSnapshot(link: Link): Link {
     ...link,
     destinationVersions: [currentDestination],
   });
+}
+
+function linkSummary(link: Link) {
+  const currentDestinationVersion = link.destinationVersions.at(-1);
+  if (currentDestinationVersion === undefined) {
+    throw new Error(`Link ${link.id} has no Destination Version`);
+  }
+  return {
+    id: link.id,
+    alias: link.alias,
+    title: link.title,
+    state: link.state,
+    revision: link.revision,
+    currentDestinationVersion,
+    createdAt: link.createdAt,
+    updatedAt: link.updatedAt,
+  };
 }

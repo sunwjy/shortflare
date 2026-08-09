@@ -3,7 +3,12 @@ import type { LinksPersistence, PersistedLinkMutation } from "@shortflare/links/
 import { and, eq, exists, ne, sql } from "drizzle-orm";
 
 import { createD1Database, databaseSchema } from "../d1";
-import { listDestinationVersions, listLinks, listReservedAliases } from "./d1-links-pagination";
+import {
+  findLinkSummariesByIds,
+  listDestinationVersions,
+  listLinks,
+  listReservedAliases,
+} from "./d1-links-pagination";
 import {
   assertAlias,
   changes,
@@ -96,6 +101,10 @@ export function createD1LinksPersistence(
     async findById(id) {
       const stored = await readStoredLink(database, { kind: "id", value: id });
       return stored?.link ?? null;
+    },
+
+    findSummariesByIds(ids) {
+      return findLinkSummariesByIds(database, ids);
     },
 
     async findReservedAlias(alias) {

@@ -4,6 +4,7 @@ import {
   encodeReservedAliasCursor,
   type DestinationVersionPage,
   type LinkPage,
+  type LinkSummary,
   type ReservedAliasPage,
 } from "@shortflare/links";
 import type {
@@ -93,6 +94,48 @@ export async function listLinks(
           })
         : null,
   };
+}
+
+export async function findLinkSummariesByIds(
+  database: ShortflareDatabase,
+  ids: readonly string[],
+): Promise<readonly LinkSummary[]> {
+  if (ids.length === 0) return [];
+
+  const latest = tableAlias(databaseSchema.destinationVersions, "latest");
+  const latestVersionNumber = database
+    .select({ value: max(latest.versionNumber) })
+    .from(latest)
+    .where(eq(latest.linkId, databaseSchema.links.id));
+  const rows = await database
+    .select({
+      id: databaseSchema.links.id,
+      alias: databaseSchema.aliases.alias,
+      title: databaseSchema.links.title,
+      state: databaseSchema.links.state,
+      revision: databaseSchema.links.revision,
+      createdAt: databaseSchema.links.createdAt,
+      updatedAt: databaseSchema.links.updatedAt,
+      destinationVersionId: databaseSchema.destinationVersions.id,
+      destination: databaseSchema.destinationVersions.destination,
+      versionNumber: databaseSchema.destinationVersions.versionNumber,
+      destinationCreatedAt: databaseSchema.destinationVersions.createdAt,
+    })
+    .from(databaseSchema.links)
+    .innerJoin(databaseSchema.aliases, eq(databaseSchema.aliases.linkId, databaseSchema.links.id))
+    .innerJoin(
+      databaseSchema.destinationVersions,
+      and(
+        eq(databaseSchema.destinationVersions.linkId, databaseSchema.links.id),
+        sql`${databaseSchema.destinationVersions.versionNumber} = (${latestVersionNumber})`,
+      ),
+    )
+    .where(inArray(databaseSchema.links.id, [...new Set(ids)]));
+  const summaries = new Map(rows.map((row) => [row.id, hydrateSummary(row)]));
+  return ids.flatMap((id) => {
+    const summary = summaries.get(id);
+    return summary === undefined ? [] : [summary];
+  });
 }
 
 export async function listDestinationVersions(
