@@ -21,7 +21,9 @@ npx shortflare@latest deploy
 ```
 
 The target system design and Cloudflare resources are documented in
-[the architecture](docs/architecture.md).
+[the architecture](docs/architecture.md). Installation, upgrade, diagnosis,
+and interrupted-deployment recovery are documented in the
+[deployment guide](docs/deployment.md).
 
 ## Planned features
 

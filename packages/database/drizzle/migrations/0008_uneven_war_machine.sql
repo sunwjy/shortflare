@@ -1,0 +1,1 @@
+ALTER TABLE `coherent_release` ADD `migration_journal_sha256` text CHECK(`migration_journal_sha256` IS NULL OR (length(`migration_journal_sha256`) = 64 AND `migration_journal_sha256` NOT GLOB '*[^0-9a-f]*'));

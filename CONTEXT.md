@@ -12,6 +12,62 @@ _Avoid_: Tenant, workspace
 The person or small team that controls an Instance and its data.
 _Avoid_: Customer, tenant
 
+**Deployment Reconciliation**:
+The repeatable process that brings an Owner's observed Cloudflare resources to a target Shortflare release without creating a second Instance or replacing a working Redirect deployment prematurely.
+_Avoid_: Deployment script, reinstall
+
+**Deployment Marker**:
+An immutable D1 record that identifies a database as the authoritative storage of an Instance managed by Deployment Reconciliation. Resource names and local configuration may locate candidates but do not establish this identity.
+_Avoid_: Local state, resource name
+
+**Orphan Resource**:
+A Cloudflare resource created during an interrupted installation but not associated with a valid Deployment Marker. It is not part of an Instance and requires explicit Owner recovery rather than automatic adoption.
+_Avoid_: Existing Instance, adoptable resource
+
+**Shortflare Release**:
+A versioned set of schema migrations, Management Worker, and Redirect Worker artifacts designed to operate together.
+_Avoid_: App version, Worker version
+
+**Coherent Release**:
+The latest Shortflare Release whose schema, Management Worker, and Redirect Worker have been verified together for an Instance.
+_Avoid_: Current version, partial release
+
+**Deployment Attempt**:
+A recorded effort to bring an Instance from its Coherent Release to a target Shortflare Release, including its progress and outcome. An interrupted attempt can be inspected and resumed but is not itself a Coherent Release.
+_Avoid_: Local checkpoint, deployment log
+
+**Deployment Plan**:
+An immutable description of the observed Instance state, target Shortflare Release, and ordered reconciliation actions approved for one Deployment Attempt. A change in observed state invalidates the plan.
+_Avoid_: Deployment script, mutable checklist
+
+**Deployment Lease**:
+An expiring exclusive claim that permits one Deployment Attempt to change an Instance. A fencing token distinguishes the current holder from an expired process that must no longer act.
+_Avoid_: Local lock, permanent lock
+
+**Deployment Control**:
+The infrastructure-owned records that identify an Instance and coordinate its Deployment Plans, Attempts, Leases, and Coherent Releases without containing Management-owned business data.
+_Avoid_: Instance settings, Audit Event
+
+**Deployment Drift**:
+A difference between observed Cloudflare or D1 state and the verified Instance state. Each difference is classified as a reconcilable Shortflare invariant, a preserved Owner setting, critical drift requiring recovery, or a foreign resource outside the Instance.
+_Avoid_: Dashboard change, configuration mismatch
+
+**Redirect Domain**:
+The primary public hostname through which an Instance serves every Link Alias. Changing it is a migration of the Instance's public short-URL namespace, not a routine deployment setting.
+_Avoid_: Worker URL, route
+
+**Management Domain**:
+An optional custom hostname for an Instance's management interface. An Instance without one uses its Management Worker's `workers.dev` address.
+_Avoid_: Redirect Domain, admin URL
+
+**Supported Upgrade**:
+A Deployment Attempt whose source Coherent Release and schema fall within the target Shortflare Release's declared compatibility range.
+_Avoid_: Pending migration, best-effort upgrade
+
+**Rollback-Safe Upgrade**:
+A Supported Upgrade whose prior Worker version remains compatible with the migrated schema and current bindings, allowing a failed Worker activation to return to that verified version.
+_Avoid_: Down migration, full rollback
+
 **User**:
 An invited person who can sign in to an Instance's management interface.
 _Avoid_: Account, owner

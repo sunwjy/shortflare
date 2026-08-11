@@ -1,20 +1,50 @@
 {
   "name": "shortflare",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sunwjy/shortflare.git"
+  },
+  "bin": {
+    "shortflare": "./dist/bin.js"
+  },
   "files": [
-    "dist"
+    "dist",
+    "release"
   ],
   "type": "module",
   "types": "./dist/index.d.ts",
   "exports": "./dist/index.js",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node dist/assemble-release.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "wrangler": "catalog:",
+    "zod": "catalog:"
+  },
   "devDependencies": {
+    "@shortflare/management": "workspace:*",
+    "@shortflare/redirect-worker": "workspace:*",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "shortflareRelease": {
+    "supportedSources": [
+      "fresh",
+      "0.0.0"
+    ],
+    "rollbackSafeFrom": [
+      "0.0.0"
+    ]
   }
 }

@@ -47,10 +47,13 @@ is unavailable.
 
 ### Cloudflare resources
 
-An Instance has exactly these MVP resources:
+An Instance normally has exactly these MVP resources:
 
-- one Redirect Worker on one required Custom Domain;
-- one Management Worker on `*.workers.dev`, with an optional Custom Domain;
+- one Redirect Worker on one primary required Custom Domain, with the prior
+  domain retained only during an explicitly approved domain migration;
+- one Management Worker on `*.workers.dev` with an optional Custom Domain, or
+  on a required Custom Domain when the account has no registered `workers.dev`
+  subdomain;
 - one D1 database shared by both Workers;
 - one Queue produced by Redirect and consumed by Management;
 - one dead-letter queue for exhausted analytics retries; and
@@ -446,10 +449,13 @@ Recovery as facets of one interface rather than flattening every method or
 splitting Authentication and Users into unrelated top-level modules. Tests use
 local D1 as a substitutable dependency.
 
-The deployment CLI has one narrow provisioning exception: before the first
-Administrator exists, it may write the singleton `initial_setup` handoff record;
-for Operator Recovery, it may write the singleton `operator_recovery` handoff.
-It never writes User, credential, Session, or audit records.
+The deployment CLI owns a narrow Deployment Control schema for the Deployment
+Marker, Deployment Attempts, Deployment Lease, Coherent Release, and schema
+compatibility metadata. It applies versioned migrations and may also write the
+singleton `initial_setup` handoff before the first Administrator exists or the
+singleton `operator_recovery` handoff during explicit recovery. It never writes
+User, credential, Session, Link, Destination Version, Reserved Alias, Click
+Event, analytics rollup, Audit Event, or other Management-owned records.
 
 Hono and React are adapters:
 
@@ -523,12 +529,12 @@ belong in the Drizzle schema, not this document.
 
 | Group | Records | Important invariants |
 | --- | --- | --- |
-| Instance | instance metadata and deployed version | exactly one row per Cloudflare account |
+| Instance | instance metadata | exactly one row per Cloudflare account |
 | Identity | initial setup and operator recovery handoffs, users, credentials, invitations, reset tokens, sessions | normalized email is unique; after setup, at least one active Administrator remains |
 | Links | links, destination versions, reserved aliases, tags | Alias is case-sensitive and unique; destination history is append-only |
 | Analytics | raw Click Events, uniqueness records, hourly/daily rollups, consumer checkpoints | Event ID is idempotent; raw and hourly retention is 90 days; daily rollups persist until erasure |
 | Audit | administrative mutation events | actor, action, subject ID, time, and non-sensitive metadata are retained for the Instance lifetime |
-| Deployment | schema and application version metadata | both Workers must be compatible with the recorded schema version |
+| Deployment Control | Deployment Marker, Attempts, Lease, Coherent Release, schema and component identities | one immutable Instance identity; one active fenced lease; a release is coherent only after both Workers and schema are verified |
 
 Archiving keeps the Link's Alias, analytics, and change history. Restoring an
 Archived Link always produces a Disabled Link so its Destination can be
@@ -805,8 +811,14 @@ Rules:
 ## Deployment and upgrades
 
 The published `shortflare` npm package contains the deployment CLI, versioned
-resource manifests, Worker artifacts, and migrations. It creates no second
-Instance in the same account.
+resource manifests, prebuilt Worker artifacts, and migrations. A Release
+manifest declares schema and release compatibility, rollback safety, resource
+templates, and the SHA-256 digest of every bundled artifact. The CLI verifies
+the complete bundle before observing a mutating plan and never builds from the
+current checkout or downloads deployment artifacts from another release
+channel. The public package is published through npm trusted publishing with
+provenance; the `latest` dist-tag contains stable releases only. It creates no
+second Instance in the same account.
 
 `npx shortflare@latest deploy`:
 
@@ -817,12 +829,13 @@ Instance in the same account.
 4. shows the current and target versions and pending migrations;
 5. creates or reconciles D1, Queue, dead-letter queue, bindings, and routes;
 6. applies backward-compatible migrations;
-7. on first install, writes or replaces the singleton `initial_setup` record
-   only while no Active Administrator exists and the Instance has never
-   completed setup;
-8. deploys Management, then Redirect;
-9. records the coherent Instance version; and
-10. prints the Management address and a one-time initial setup token.
+7. deploys and verifies Management, then Redirect;
+8. records the coherent Instance version;
+9. on first install, creates the one-time setup token and writes the singleton
+   `initial_setup` record only after the release is coherent, while no Active
+   Administrator exists and the Instance has never completed setup; and
+10. prints the Management address and, for an interactive installation, the
+    one-time setup token.
 
 Drizzle Kit generates reviewed, forward-only SQL migrations from the typed
 schema; Wrangler lists and applies them to D1. Applied migration files are
@@ -832,28 +845,56 @@ both Workers and the schema are compatible. Destructive changes use
 expand/migrate/contract across releases; schema rollback uses the documented
 restore workflow rather than down migrations.
 
-The setup token is shown only when first created in an interactive terminal,
-expires after 30 minutes, is stored only as a hash in the `initial_setup`
-record, and is invalidated after use. An idempotent rerun preserves a valid
-pending token; expiry or explicit rotation replaces it and invalidates the
-prior token. Management atomically consumes the record to create the initial
-User, credential, and Audit Event and permanently sets the Instance's
+The setup token is created only after both Workers and the schema form a
+Coherent Release. It is shown only when first created in an interactive
+terminal, expires after 30 minutes, is stored only as a hash in the
+`initial_setup` record, and is invalidated after use. An idempotent rerun
+preserves a valid pending token; expiry or explicit rotation replaces it and
+invalidates the prior token. If the plaintext was not received, explicit
+rotation is available only while no Active Administrator exists and setup has
+never completed. Management atomically consumes the record to create the
+initial User, credential, and Audit Event and permanently sets the Instance's
 `setup_completed_at`; that marker is never cleared, even if data is later
 damaged or restored. Non-interactive deployment requires an explicitly supplied
 secret and suppresses token output.
 
 The command is idempotent and resumable. A failure leaves the existing Redirect
 deployment in place, and rerunning continues reconciliation. Destructive schema
-changes use expand/migrate/contract across releases. Partial Worker upgrades are
-not supported.
+changes use expand/migrate/contract across releases. A transitional component
+state may exist during recovery, but a partial Worker upgrade is never recorded
+as a Coherent Release or treated as complete.
+
+A Coherent Release requires both control-plane and live data-plane verification.
+The CLI checks the Deployment Marker, migrations, release metadata, Worker
+versions and bindings, Queue producer/consumer/dead-letter and retention policy,
+required secret names, and Custom Domain TLS state. It then requests the
+Management health endpoint and the Redirect root. When an Active Link exists,
+it sends `HEAD` to that Alias and checks the expected status and `Location`
+without producing a Click Event. A bounded readiness timeout leaves the
+Deployment Attempt incomplete and resumable rather than recording an unverified
+release. Production verification never inserts a synthetic analytics event.
+
+`shortflare diagnose` observes the Deployment Marker, releases and migrations,
+Worker versions and bindings, Queue and dead-letter queue, domains, required
+secret names, and interrupted Deployment Attempts without changing them. It
+supports human-readable and JSON output. `shortflare recover` exposes only
+named, separately planned recovery actions reported by diagnosis, such as
+removing an Orphan Resource, rotating an unavailable Setup Token, restoring or
+explicitly rotating the analytics secret, or applying a verified Worker
+rollback. Routine deployment does not guess at ambiguous drift, and uninstall
+is outside the MVP.
 
 Backup commands use D1 Time Travel for recent operational recovery and SQL
 export for portable backups. Every production migration requires a preceding
-export, and Owners are advised to keep periodic encrypted exports outside the
-Cloudflare account. Restore always presents the target and impact, requires
-separate confirmation, pauses Management mutations, Queue consumption, and
-retention cleanup, and invalidates Sessions and one-time handoffs before
-traffic resumes. The full procedure lives in `docs/operations.md`.
+export. By default, the CLI writes it with user-only permissions under the
+platform-standard Shortflare user data directory, grouped by Cloudflare
+account; `--backup-dir` may target an encrypted external location. The CLI
+never deletes these exports automatically, and Owners are advised to keep
+periodic encrypted copies outside the Cloudflare account. Restore always
+presents the target and impact, requires separate confirmation, pauses
+Management mutations, Queue consumption, and retention cleanup, and invalidates
+Sessions and one-time handoffs before traffic resumes. The full procedure lives
+in `docs/operations.md`.
 
 ## Testing and verification
 
@@ -872,8 +913,18 @@ Verification has three observable layers:
 
 Management backend changes additionally exercise the authenticated browser flows
 for login, Links, and Users and require a clean browser console. A deployment
-smoke test against a dedicated Cloudflare account follows once the CLI is safe
-and idempotent.
+CLI pull request additionally tests the pure reconciliation planner with failure
+injection, Cloudflare adapter contracts, local D1 export/import and
+source-to-target migrations, JSON and exit-code contracts, and `npm pack`
+artifact digests.
+
+Before publication, the exact candidate tarball runs against a dedicated
+Cloudflare account and test zone to prove fresh install, no-op rerun,
+preceding-release upgrade, interrupted-stage resumption, ordered Worker
+deployment, Custom Domain TLS, Queue and dead-letter behavior, and secret
+preservation. Cleanup removes the consumer binding before Workers, Queues, D1,
+and domains and verifies absence. Cleanup failure blocks release without
+escalating to a broader deletion.
 
 ## Operations and security
 

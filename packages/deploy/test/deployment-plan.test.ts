@@ -1,0 +1,484 @@
+import { describe, expect, it } from "vitest";
+
+import { createDeploymentPlan, parseReleaseManifest, releaseOwnershipPolicy } from "../src/index";
+
+describe("Deployment Reconciliation plan", () => {
+  it("orders a fresh installation without exposing the setup secret", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "absent",
+        accountId: "account-1",
+        workersDevRegistered: true,
+        collisions: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      plan: {
+        operation: "install",
+        accountId: "account-1",
+        sourceRelease: "fresh",
+        targetRelease: "1.0.0",
+        targetManifestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        destructive: false,
+        actions: [
+          { kind: "create-d1", resource: "shortflare" },
+          { kind: "write-deployment-marker" },
+          {
+            kind: "apply-migrations",
+            migrations: ["0000_initial_schema.sql", "0005_deployment_control.sql"],
+          },
+          { kind: "create-queue", resource: "shortflare-events-dlq", role: "dead-letter" },
+          { kind: "create-queue", resource: "shortflare-events", role: "primary" },
+          { kind: "upload-worker", worker: "management" },
+          { kind: "upload-worker", worker: "redirect" },
+          { kind: "configure-analytics-secret" },
+          { kind: "upload-worker", worker: "redirect" },
+          { kind: "activate-worker", worker: "management" },
+          { kind: "configure-domain", worker: "management", domain: { kind: "workers-dev" } },
+          { kind: "verify-worker", worker: "management" },
+          { kind: "activate-worker", worker: "redirect" },
+          {
+            kind: "configure-domain",
+            worker: "redirect",
+            domain: { kind: "custom-domain", hostname: "go.example.com" },
+          },
+          { kind: "verify-worker", worker: "redirect" },
+          { kind: "record-coherent-release", release: "1.0.0" },
+          { kind: "create-setup-handoff", administratorEmail: "owner@example.com" },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("setupToken");
+  });
+
+  it("stops before adopting a same-named unmarked resource", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "absent",
+        accountId: "account-1",
+        workersDevRegistered: true,
+        collisions: ["d1:shortflare"],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      kind: "resource-collision",
+      collisions: ["d1:shortflare"],
+      recovery: "recover-orphan",
+    });
+  });
+
+  it("requires a Management Domain when workers.dev is unavailable", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "absent",
+        accountId: "account-1",
+        workersDevRegistered: false,
+        collisions: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      kind: "management-address-required",
+      recovery: "provide-management-domain-or-register-workers-dev",
+    });
+  });
+
+  it("backs up and migrates before activating an ordered upgrade", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "present",
+        accountId: "account-1",
+        instanceId: "instance-1",
+        coherentRelease: "0.9.0",
+        schemaVersion: 4,
+        pendingMigrations: ["0005_deployment_control.sql"],
+        analyticsSecret: "present",
+        drift: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      plan: {
+        operation: "upgrade",
+        sourceRelease: "0.9.0",
+        targetRelease: "1.0.0",
+        actions: [
+          { kind: "export-d1" },
+          { kind: "verify-backup" },
+          { kind: "apply-migrations", migrations: ["0005_deployment_control.sql"] },
+          {
+            kind: "create-queue",
+            resource: "shortflare-events-dlq",
+            role: "dead-letter",
+          },
+          { kind: "create-queue", resource: "shortflare-events", role: "primary" },
+          { kind: "upload-worker", worker: "management" },
+          { kind: "upload-worker", worker: "redirect" },
+          { kind: "activate-worker", worker: "management" },
+          { kind: "configure-domain", worker: "management", domain: { kind: "workers-dev" } },
+          { kind: "verify-worker", worker: "management" },
+          { kind: "activate-worker", worker: "redirect" },
+          {
+            kind: "configure-domain",
+            worker: "redirect",
+            domain: { kind: "custom-domain", hostname: "go.example.com" },
+          },
+          { kind: "verify-worker", worker: "redirect" },
+          { kind: "record-coherent-release", release: "1.0.0" },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("create-setup-handoff");
+  });
+
+  it("stops an existing Instance when its analytics secret is missing", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "present",
+        accountId: "account-1",
+        instanceId: "instance-1",
+        coherentRelease: "0.9.0",
+        schemaVersion: 4,
+        pendingMigrations: ["0005_deployment_control.sql"],
+        analyticsSecret: "missing",
+        drift: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      kind: "analytics-secret-missing",
+      recovery: "restore-or-rotate-analytics-secret",
+    });
+  });
+
+  it("rejects an undeclared source release before backup or mutation", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "present",
+        accountId: "account-1",
+        instanceId: "instance-1",
+        coherentRelease: "0.8.0",
+        schemaVersion: 3,
+        pendingMigrations: ["0004_previous.sql", "0005_deployment_control.sql"],
+        analyticsSecret: "present",
+        drift: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      kind: "unsupported-upgrade",
+      sourceRelease: "0.8.0",
+      targetRelease: "1.0.0",
+      supportedSources: ["fresh", "0.9.0"],
+    });
+  });
+
+  it("leaves critical Deployment Drift for explicit recovery", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "present",
+        accountId: "account-1",
+        instanceId: "instance-1",
+        coherentRelease: "0.9.0",
+        schemaVersion: 4,
+        pendingMigrations: ["0005_deployment_control.sql"],
+        analyticsSecret: "present",
+        drift: [{ kind: "critical", field: "management.artifactSha256" }],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      kind: "critical-drift",
+      fields: ["management.artifactSha256"],
+      recovery: "diagnose-and-recover",
+    });
+  });
+
+  it("returns a no-op plan for an already coherent target release", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "present",
+        accountId: "account-1",
+        instanceId: "instance-1",
+        coherentRelease: "1.0.0",
+        schemaVersion: 5,
+        pendingMigrations: [],
+        analyticsSecret: "present",
+        drift: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      plan: {
+        operation: "noop",
+        accountId: "account-1",
+        sourceRelease: "1.0.0",
+        targetRelease: "1.0.0",
+        targetManifestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        destructive: false,
+        actions: [],
+        digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    });
+  });
+
+  it("resumes a marked first installation without recreating D1 or rotating its new secret", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) throw new Error("test manifest must be valid");
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "present",
+        accountId: "account-1",
+        instanceId: "instance-1",
+        coherentRelease: "fresh",
+        schemaVersion: 5,
+        pendingMigrations: [],
+        analyticsSecret: "missing",
+        drift: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      plan: { operation: "install", sourceRelease: "fresh" },
+    });
+    if (!result.ok) throw new Error("installation resume plan must be available");
+    expect(result.plan.actions.slice(0, 4)).toMatchObject([
+      { kind: "create-queue", resource: "shortflare-events-dlq" },
+      { kind: "create-queue", resource: "shortflare-events" },
+      { kind: "upload-worker", worker: "management" },
+      { kind: "upload-worker", worker: "redirect" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("create-d1");
+    expect(JSON.stringify(result)).not.toContain("write-deployment-marker");
+  });
+
+  it("refuses to replace an Instance Custom Domain during routine deployment", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) throw new Error("test manifest must be valid");
+
+    expect(
+      createDeploymentPlan({
+        target: parsed.value,
+        observed: {
+          kind: "present",
+          accountId: "account-1",
+          instanceId: "instance-1",
+          coherentRelease: "1.0.0",
+          schemaVersion: 5,
+          pendingMigrations: [],
+          analyticsSecret: "present",
+          domains: { redirect: "go.example.com" },
+          drift: [],
+        },
+        requested: { redirectDomain: "other.example.com" },
+      }),
+    ).toEqual({
+      ok: false,
+      kind: "critical-drift",
+      fields: ["domain.redirect"],
+      recovery: "diagnose-and-recover",
+    });
+  });
+
+  it("repairs a missing first setup handoff after the release became coherent", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) throw new Error("test manifest must be valid");
+    const result = createDeploymentPlan({
+      target: parsed.value,
+      observed: {
+        kind: "present",
+        accountId: "account-1",
+        instanceId: "instance-1",
+        coherentRelease: "1.0.0",
+        schemaVersion: 5,
+        pendingMigrations: [],
+        analyticsSecret: "present",
+        initialSetup: "required",
+        drift: [],
+      },
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      plan: {
+        operation: "install",
+        actions: [{ kind: "create-setup-handoff", administratorEmail: "owner@example.com" }],
+      },
+    });
+  });
+
+  it("binds approval to the exact effective domain plan", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) {
+      throw new Error("test manifest must be valid");
+    }
+
+    const observed = {
+      kind: "absent" as const,
+      accountId: "account-1",
+      workersDevRegistered: true,
+      collisions: [],
+    };
+    const first = createDeploymentPlan({
+      target: parsed.value,
+      observed,
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+    const repeated = createDeploymentPlan({
+      target: parsed.value,
+      observed,
+      requested: {
+        redirectDomain: "go.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+    const changedDomain = createDeploymentPlan({
+      target: parsed.value,
+      observed,
+      requested: {
+        redirectDomain: "links.example.com",
+        administratorEmail: "owner@example.com",
+      },
+    });
+
+    expect(first.ok && repeated.ok && changedDomain.ok).toBe(true);
+    if (!first.ok || !repeated.ok || !changedDomain.ok) {
+      throw new Error("fresh plans must be available");
+    }
+    expect(first.plan.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(repeated.plan.digest).toBe(first.plan.digest);
+    expect(changedDomain.plan.digest).not.toBe(first.plan.digest);
+  });
+});
+
+function releaseManifest() {
+  return {
+    formatVersion: 1,
+    release: "1.0.0",
+    schema: {
+      version: 5,
+      journalSha256: "1".repeat(64),
+      migrations: ["0000_initial_schema.sql", "0005_deployment_control.sql"],
+    },
+    supportedSources: ["fresh", "0.9.0"],
+    rollbackSafeFrom: ["0.9.0"],
+    ownership: releaseOwnershipPolicy,
+    artifacts: {
+      management: {
+        path: "artifacts/management/index.js",
+        sha256: "2".repeat(64),
+      },
+      redirect: {
+        path: "artifacts/redirect/index.js",
+        sha256: "3".repeat(64),
+      },
+      migrations: {
+        path: "artifacts/migrations",
+        sha256: "4".repeat(64),
+      },
+    },
+  } as const;
+}
