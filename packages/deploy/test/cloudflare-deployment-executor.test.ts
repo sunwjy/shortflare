@@ -6,6 +6,46 @@ import { releaseOwnershipPolicy } from "../src/release-manifest";
 import { createWranglerAdapter } from "../src/wrangler-adapter";
 
 describe("Cloudflare Deployment Action executor", () => {
+  it("waits for custom-domain publication before the first Redirect lookup", async () => {
+    const delays: number[] = [];
+    const api = createCloudflareApi({
+      apiToken: "api-token",
+      fetch: async () =>
+        Response.json({
+          success: true,
+          errors: [],
+          messages: [],
+          result: [{ success: true, results: [] }],
+        }),
+    });
+    const executor = createCloudflareDeploymentExecutor({
+      api,
+      wrangler: createWranglerAdapter({
+        run: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      }),
+      accountId: "account-1",
+      existingDatabaseId: "database-1",
+      existingInstanceId: "instance-1",
+      releaseRoot: "/unused",
+      temporaryRoot: "/unused",
+      backupDirectory: "/unused",
+      redirectDomain: "go.example.com",
+      manifest: releaseManifest(),
+      now: () => new Date(1_000),
+      randomBytes: () => Uint8Array.from({ length: 32 }, () => 1),
+      randomId: () => "instance-1",
+      fetch: async () => new Response(null, { status: 200 }),
+      delay: async (milliseconds) => {
+        delays.push(milliseconds);
+      },
+    });
+
+    await expect(
+      executor.apply({ kind: "verify-worker", worker: "redirect" }, deploymentPlan()),
+    ).resolves.toEqual({ ok: true });
+    expect(delays).toEqual([30_000]);
+  });
+
   it("allows a reserved Queue to be reconciled during an interrupted rerun", async () => {
     const api = createCloudflareApi({
       apiToken: "api-token",

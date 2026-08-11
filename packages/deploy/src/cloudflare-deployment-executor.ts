@@ -20,6 +20,7 @@ const resourceNames = {
   redirect: "shortflare-redirect",
 } as const;
 const queueRetentionSeconds = 86_400;
+const customDomainPropagationDelayMs = 30_000;
 const setupEligibilitySchema = z.looseObject({
   setupCompletedAt: z.number().nullable(),
   activeAdministrators: z.number().int().nonnegative(),
@@ -666,6 +667,9 @@ export function createCloudflareDeploymentExecutor(
       if (!subdomain.registered) throw new Error("workers.dev subdomain is not registered");
       url = `https://${resourceNames.management}.${subdomain.subdomain}.workers.dev/api/internal/health`;
     }
+    // Querying before Cloudflare publishes the authoritative record can cache
+    // NXDOMAIN for the zone's full negative TTL, defeating short health retries.
+    if (worker === "redirect") await input.delay(customDomainPropagationDelayMs);
     await pollHealth(url, 30, async (response) => {
       if (!response.ok) return false;
       if (worker === "redirect") return true;
