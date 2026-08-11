@@ -43,9 +43,53 @@ describe("Cloudflare deployment observer", () => {
       analyticsSecret: "present",
     });
   });
+
+  it("treats a missing primary consumer as resumable but rejects foreign consumers", async () => {
+    const missingConsumer = await observeCloudflareDeployment({
+      api: fakeApi(markerOnlyQuery, [
+        queue("queue-1", "shortflare-events", []),
+        queue("queue-2", "shortflare-events-dlq"),
+      ]),
+      accountId: "account-1",
+      targetMigrations: [],
+    });
+    const foreignConsumer = await observeCloudflareDeployment({
+      api: fakeApi(markerOnlyQuery, [
+        queue("queue-1", "shortflare-events", [
+          {
+            id: "consumer-foreign",
+            type: "worker",
+            scriptName: "foreign-worker",
+            deadLetterQueue: "shortflare-events-dlq",
+          },
+        ]),
+        queue("queue-2", "shortflare-events-dlq"),
+      ]),
+      accountId: "account-1",
+      targetMigrations: [],
+    });
+
+    expect(missingConsumer).toMatchObject({
+      kind: "present",
+      drift: expect.arrayContaining([
+        { kind: "shortflare-invariant", field: "queue.primary.consumer" },
+      ]),
+    });
+    expect(foreignConsumer).toMatchObject({
+      kind: "present",
+      drift: expect.arrayContaining([{ kind: "critical", field: "queue.primary.consumer" }]),
+    });
+  });
 });
 
-function fakeApi(query: (sql: string) => Promise<readonly unknown[]>): CloudflareApi {
+async function markerOnlyQuery(sql: string): Promise<readonly unknown[]> {
+  return sql.includes("deployment_marker") ? [{ instanceId: "instance-1" }] : [];
+}
+
+function fakeApi(
+  query: (sql: string) => Promise<readonly unknown[]>,
+  queues = [queue("queue-1", "shortflare-events"), queue("queue-2", "shortflare-events-dlq")],
+): CloudflareApi {
   return {
     listD1Databases: async () => ({
       ok: true,
@@ -91,7 +135,7 @@ function fakeApi(query: (sql: string) => Promise<readonly unknown[]>): Cloudflar
     }),
     listQueues: async () => ({
       ok: true,
-      queues: [queue("queue-1", "shortflare-events"), queue("queue-2", "shortflare-events-dlq")],
+      queues,
     }),
     createQueue: async () => {
       throw new Error("not used");
@@ -105,7 +149,17 @@ function fakeApi(query: (sql: string) => Promise<readonly unknown[]>): Cloudflar
   };
 }
 
-function queue(id: string, name: string) {
+function queue(
+  id: string,
+  name: string,
+  consumers?: readonly {
+    id: string;
+    type: string;
+    scriptName: string;
+    deadLetterQueue: string;
+    maxRetries?: number;
+  }[],
+) {
   return {
     id,
     name,
@@ -113,7 +167,8 @@ function queue(id: string, name: string) {
     producers:
       name === "shortflare-events" ? [{ type: "worker", script: "shortflare-redirect" }] : [],
     consumers:
-      name === "shortflare-events"
+      consumers ??
+      (name === "shortflare-events"
         ? [
             {
               id: "consumer-1",
@@ -123,6 +178,6 @@ function queue(id: string, name: string) {
               maxRetries: 3,
             },
           ]
-        : [],
+        : []),
   };
 }

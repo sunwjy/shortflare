@@ -380,19 +380,23 @@ function queueDrift(queues: readonly CloudflareQueue[]): readonly ObservedDeploy
         candidate.maxConcurrency === 1 &&
         candidate.retryDelay === 60,
     );
+    const consumerDrift =
+      matchingConsumers.length === 1 && queue.consumers.length === 1
+        ? []
+        : queue.consumers.length === 0
+          ? [
+              {
+                kind: "shortflare-invariant" as const,
+                field: "queue.primary.consumer",
+              },
+            ]
+          : [{ kind: "critical" as const, field: "queue.primary.consumer" }];
     return [
       ...retention,
       ...(producer
         ? []
         : [{ kind: "shortflare-invariant" as const, field: "queue.primary.producer" }]),
-      ...(matchingConsumers.length === 1 && queue.consumers.length === 1
-        ? []
-        : [
-            {
-              kind: "critical" as const,
-              field: "queue.primary.consumer",
-            },
-          ]),
+      ...consumerDrift,
     ];
   });
 }
