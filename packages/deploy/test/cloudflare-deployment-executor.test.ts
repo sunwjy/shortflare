@@ -6,6 +6,55 @@ import { releaseOwnershipPolicy } from "../src/release-manifest";
 import { createWranglerAdapter } from "../src/wrangler-adapter";
 
 describe("Cloudflare Deployment Action executor", () => {
+  it("allows a reserved Queue to be reconciled during an interrupted rerun", async () => {
+    const api = createCloudflareApi({
+      apiToken: "api-token",
+      fetch: async () =>
+        Response.json({
+          success: true,
+          errors: [],
+          messages: [],
+          result: [
+            {
+              queue_id: "queue-1",
+              queue_name: "shortflare-events-dlq",
+              settings: { delivery_delay: 0, message_retention_period: 86_400 },
+            },
+          ],
+        }),
+    });
+    const executor = createCloudflareDeploymentExecutor({
+      api,
+      wrangler: createWranglerAdapter({
+        run: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      }),
+      accountId: "account-1",
+      existingDatabaseId: "database-1",
+      existingInstanceId: "instance-1",
+      releaseRoot: "/unused",
+      temporaryRoot: "/unused",
+      backupDirectory: "/unused",
+      redirectDomain: "go.example.com",
+      manifest: releaseManifest(),
+      now: () => new Date(1_000),
+      randomBytes: () => Uint8Array.from({ length: 32 }, () => 1),
+      randomId: () => "instance-1",
+      fetch: async () => new Response(null, { status: 200 }),
+      delay: async () => undefined,
+    });
+
+    await expect(
+      executor.revalidate(
+        {
+          kind: "create-queue",
+          resource: "shortflare-events-dlq",
+          role: "dead-letter",
+        },
+        deploymentPlan(),
+      ),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("creates the analytics secret once and attaches only unclaimed custom domains", async () => {
     const wranglerCalls: Array<{ arguments: readonly string[]; stdin?: string }> = [];
     const api = createCloudflareApi({

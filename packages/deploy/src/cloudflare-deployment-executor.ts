@@ -183,9 +183,9 @@ export function createCloudflareDeploymentExecutor(
         if (!queues.ok) {
           return { ok: false, field: `queue.${action.resource}`, ...cloudflareFailure(queues) };
         }
-        return queues.ok && !queues.queues.some((queue) => queue.name === action.resource)
-          ? { ok: true }
-          : { ok: false, field: `queue.${action.resource}` };
+        // A present Instance owns its reserved Queue names. The action reconciles
+        // existing settings, which is required for safe interrupted reruns.
+        return { ok: true };
       }
       if (action.kind === "write-deployment-marker") {
         const rows = await queryMissingTableAsEmpty(
