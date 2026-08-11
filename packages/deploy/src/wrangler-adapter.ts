@@ -39,6 +39,18 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
       ]);
       return resolveVersionId(configPath, versionTag);
     },
+    async deployNewWorker(configPath: string, versionTag: string): Promise<string> {
+      await checkedRun([
+        "deploy",
+        "--config",
+        configPath,
+        "--strict",
+        "--keep-vars",
+        "--tag",
+        versionTag,
+      ]);
+      return resolveVersionId(configPath, versionTag);
+    },
     async activateWorker(configPath: string, versionTag: string): Promise<void> {
       await checkedRun([
         "versions",

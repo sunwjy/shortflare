@@ -556,10 +556,13 @@ export function createCloudflareDeploymentExecutor(
         return;
       case "upload-worker": {
         const resolved = await resolvedArtifacts();
-        await input.wrangler.uploadWorker(
-          configFor(resolved, action.worker),
-          versionTag(plan, action.worker),
-        );
+        const scripts = await input.api.listWorkerScripts(input.accountId);
+        if (!scripts.ok) throw new CloudflareExecutionError(scripts);
+        const config = configFor(resolved, action.worker);
+        const tag = versionTag(plan, action.worker);
+        const exists = scripts.scripts.some((script) => script.name === workerName(action.worker));
+        if (exists) await input.wrangler.uploadWorker(config, tag);
+        else await input.wrangler.deployNewWorker(config, tag);
         return;
       }
       case "activate-worker": {

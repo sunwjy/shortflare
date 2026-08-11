@@ -19,6 +19,7 @@ describe("pinned Wrangler adapter", () => {
     });
 
     await adapter.applyMigrations("/bundle/management/wrangler.json");
+    await adapter.deployNewWorker("/bundle/management/wrangler.json", "1.0.0-management");
     await adapter.uploadWorker("/bundle/management/wrangler.json", "1.0.0-management");
     await adapter.activateWorker("/bundle/management/wrangler.json", "1.0.0-management");
 
@@ -33,6 +34,20 @@ describe("pinned Wrangler adapter", () => {
           "--config",
           "/bundle/management/wrangler.json",
         ],
+      },
+      {
+        arguments: [
+          "deploy",
+          "--config",
+          "/bundle/management/wrangler.json",
+          "--strict",
+          "--keep-vars",
+          "--tag",
+          "1.0.0-management",
+        ],
+      },
+      {
+        arguments: ["versions", "list", "--config", "/bundle/management/wrangler.json", "--json"],
       },
       {
         arguments: [
