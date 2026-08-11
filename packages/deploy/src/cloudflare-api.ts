@@ -286,7 +286,7 @@ export function createCloudflareApi(
         ),
         request(
           "GET",
-          `/accounts/${encodeURIComponent(accountId)}/pages/projects?per_page=100`,
+          `/accounts/${encodeURIComponent(accountId)}/pages/projects?per_page=50`,
           z.array(pagesProjectSchema),
         ),
       ]);

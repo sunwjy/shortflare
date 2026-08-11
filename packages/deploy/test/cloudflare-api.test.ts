@@ -56,9 +56,11 @@ describe("Cloudflare REST control-plane adapter", () => {
   });
 
   it("preflights exact DNS, Pages, and Worker route hostname attachments", async () => {
+    const requestedUrls: string[] = [];
     const api = createCloudflareApi({
       apiToken: "secret-token",
       fetch: async (input) => {
+        requestedUrls.push(String(input));
         const pathname = new URL(String(input)).pathname;
         const result =
           pathname === "/client/v4/zones"
@@ -80,6 +82,9 @@ describe("Cloudflare REST control-plane adapter", () => {
         { kind: "pages", owner: "foreign-pages" },
       ],
     });
+    expect(requestedUrls).toContain(
+      "https://api.cloudflare.com/client/v4/accounts/account-1/pages/projects?per_page=50",
+    );
   });
 
   it("updates an existing nonempty Queue instead of recreating it", async () => {
