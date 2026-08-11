@@ -31,6 +31,38 @@ describe("Cloudflare REST control-plane adapter", () => {
     });
   });
 
+  it("normalizes the live Queue consumer script field", async () => {
+    const api = createCloudflareApi({
+      apiToken: "secret-token",
+      fetch: async () =>
+        Response.json({
+          success: true,
+          errors: null,
+          result: [
+            {
+              queue_id: "queue-1",
+              queue_name: "shortflare-events",
+              settings: { delivery_delay: 0, message_retention_period: 86_400 },
+              consumers: [
+                {
+                  consumer_id: "consumer-1",
+                  script: "shortflare-management",
+                  type: "worker",
+                  dead_letter_queue: "shortflare-events-dlq",
+                  settings: { batch_size: 10, max_wait_time_ms: 1_000 },
+                },
+              ],
+            },
+          ],
+        }),
+    });
+
+    await expect(api.listQueues("account-1")).resolves.toMatchObject({
+      ok: true,
+      queues: [{ consumers: [{ scriptName: "shortflare-management" }] }],
+    });
+  });
+
   it("discovers D1 by exact name and validates the API envelope", async () => {
     const requests: Array<{ url: string; authorization: string | null }> = [];
     const api = createCloudflareApi({

@@ -151,23 +151,29 @@ const queueSchema = z.looseObject({
     .optional(),
   consumers: z
     .array(
-      z.looseObject({
-        consumer_id: z.string().min(1),
-        script_name: z.string().min(1),
-        type: z.string().min(1),
-        dead_letter_queue: z.string(),
-        settings: z
-          .looseObject({
-            max_retries: z.number().optional(),
-            batch_size: z.number().optional(),
-            max_batch_size: z.number().optional(),
-            max_wait_time_ms: z.number().optional(),
-            max_batch_timeout: z.number().optional(),
-            max_concurrency: z.number().optional(),
-            retry_delay: z.number().optional(),
-          })
-          .optional(),
-      }),
+      z
+        .looseObject({
+          consumer_id: z.string().min(1),
+          type: z.string().min(1),
+          dead_letter_queue: z.string(),
+          settings: z
+            .looseObject({
+              max_retries: z.number().optional(),
+              batch_size: z.number().optional(),
+              max_batch_size: z.number().optional(),
+              max_wait_time_ms: z.number().optional(),
+              max_batch_timeout: z.number().optional(),
+              max_concurrency: z.number().optional(),
+              retry_delay: z.number().optional(),
+            })
+            .optional(),
+        })
+        .and(
+          z.union([
+            z.looseObject({ script_name: z.string().min(1), script: z.string().optional() }),
+            z.looseObject({ script_name: z.string().optional(), script: z.string().min(1) }),
+          ]),
+        ),
     )
     .optional(),
 });
@@ -568,7 +574,7 @@ function toQueue(queue: z.infer<typeof queueSchema>): CloudflareQueue {
     })),
     consumers: (queue.consumers ?? []).map((consumer) => ({
       id: consumer.consumer_id,
-      scriptName: consumer.script_name,
+      scriptName: queueConsumerScript(consumer),
       type: consumer.type,
       deadLetterQueue: consumer.dead_letter_queue,
       ...(consumer.settings?.max_retries === undefined
@@ -596,6 +602,15 @@ function toQueue(queue: z.infer<typeof queueSchema>): CloudflareQueue {
         : { retryDelay: consumer.settings.retry_delay }),
     })),
   };
+}
+
+function queueConsumerScript(consumer: {
+  script_name?: string | undefined;
+  script?: string | undefined;
+}): string {
+  const scriptName = consumer.script_name ?? consumer.script;
+  if (scriptName === undefined) throw new Error("Validated Queue consumer is missing its script");
+  return scriptName;
 }
 
 function routePatternCoversHostname(pattern: string, hostname: string): boolean {
