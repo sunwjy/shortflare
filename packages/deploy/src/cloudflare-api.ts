@@ -273,6 +273,23 @@ export function createCloudflareApi(
       if (zone === undefined) {
         return { ok: true, attachments: [] };
       }
+      const pagesProjects = async (
+        page = 1,
+        projects: z.infer<typeof pagesProjectSchema>[] = [],
+      ): Promise<
+        { ok: true; result: z.infer<typeof pagesProjectSchema>[] } | CloudflareApiFailure
+      > => {
+        const response = await request(
+          "GET",
+          `/accounts/${encodeURIComponent(accountId)}/pages/projects?per_page=10&page=${page}`,
+          z.array(pagesProjectSchema),
+        );
+        if (!response.ok) return response;
+        const accumulated = [...projects, ...response.result];
+        return response.result.length < 10
+          ? { ok: true, result: accumulated }
+          : pagesProjects(page + 1, accumulated);
+      };
       const [records, routes, projects] = await Promise.all([
         request(
           "GET",
@@ -284,11 +301,7 @@ export function createCloudflareApi(
           `/zones/${encodeURIComponent(zone.id)}/workers/routes`,
           z.array(workerRouteSchema),
         ),
-        request(
-          "GET",
-          `/accounts/${encodeURIComponent(accountId)}/pages/projects?per_page=50`,
-          z.array(pagesProjectSchema),
-        ),
+        pagesProjects(),
       ]);
       if (!records.ok) return records;
       if (!routes.ok) return routes;

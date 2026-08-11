@@ -55,13 +55,14 @@ describe("Cloudflare REST control-plane adapter", () => {
     expect(body).toEqual({ sql: "SELECT ? AS singletonKey", params: ["1"] });
   });
 
-  it("preflights exact DNS, Pages, and Worker route hostname attachments", async () => {
+  it("preflights exact DNS, every Pages page, and Worker route hostname attachments", async () => {
     const requestedUrls: string[] = [];
     const api = createCloudflareApi({
       apiToken: "secret-token",
       fetch: async (input) => {
         requestedUrls.push(String(input));
         const pathname = new URL(String(input)).pathname;
+        const url = new URL(String(input));
         const result =
           pathname === "/client/v4/zones"
             ? [{ id: "zone-1", name: "example.com" }]
@@ -69,7 +70,12 @@ describe("Cloudflare REST control-plane adapter", () => {
               ? [{ name: "go.example.com", type: "CNAME" }]
               : pathname.endsWith("/workers/routes")
                 ? [{ pattern: "go.example.com/*", script: "foreign-worker" }]
-                : [{ name: "foreign-pages", domains: ["go.example.com"] }];
+                : url.searchParams.get("page") === "1"
+                  ? Array.from({ length: 10 }, (_, index) => ({
+                      name: `unrelated-pages-${index}`,
+                      domains: [`unrelated-${index}.example.com`],
+                    }))
+                  : [{ name: "foreign-pages", domains: ["go.example.com"] }];
         return Response.json({ success: true, errors: [], messages: [], result });
       },
     });
@@ -83,7 +89,10 @@ describe("Cloudflare REST control-plane adapter", () => {
       ],
     });
     expect(requestedUrls).toContain(
-      "https://api.cloudflare.com/client/v4/accounts/account-1/pages/projects?per_page=50",
+      "https://api.cloudflare.com/client/v4/accounts/account-1/pages/projects?per_page=10&page=1",
+    );
+    expect(requestedUrls).toContain(
+      "https://api.cloudflare.com/client/v4/accounts/account-1/pages/projects?per_page=10&page=2",
     );
   });
 
