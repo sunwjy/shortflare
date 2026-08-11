@@ -52,13 +52,14 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
       return resolveVersionId(configPath, versionTag);
     },
     async activateWorker(configPath: string, versionTag: string): Promise<void> {
+      const versionId = await resolveVersionId(configPath, versionTag);
       await checkedRun([
         "versions",
         "deploy",
         "--config",
         configPath,
-        "--version-tag",
-        versionTag,
+        "--version-id",
+        versionId,
         "--yes",
       ]);
     },
@@ -184,7 +185,7 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
 function findVersionId(output: string, versionTag: string): string {
   const parsed = z.array(workerVersionSchema).safeParse(JSON.parse(output));
   if (!parsed.success) throw new WranglerCommandError("versions list");
-  const version = parsed.data.find(
+  const version = parsed.data.findLast(
     (candidate) =>
       candidate.tag === versionTag || candidate.annotations?.["workers/tag"] === versionTag,
   );

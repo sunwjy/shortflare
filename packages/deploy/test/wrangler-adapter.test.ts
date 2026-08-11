@@ -11,7 +11,10 @@ describe("pinned Wrangler adapter", () => {
         return {
           exitCode: 0,
           stdout: arguments_.includes("list")
-            ? JSON.stringify([{ id: "management-version-id", tag: "1.0.0-management" }])
+            ? JSON.stringify([
+                { id: "older-management-version-id", tag: "1.0.0-management" },
+                { id: "management-version-id", tag: "1.0.0-management" },
+              ])
             : "",
           stderr: "",
         };
@@ -65,13 +68,16 @@ describe("pinned Wrangler adapter", () => {
         arguments: ["versions", "list", "--config", "/bundle/management/wrangler.json", "--json"],
       },
       {
+        arguments: ["versions", "list", "--config", "/bundle/management/wrangler.json", "--json"],
+      },
+      {
         arguments: [
           "versions",
           "deploy",
           "--config",
           "/bundle/management/wrangler.json",
-          "--version-tag",
-          "1.0.0-management",
+          "--version-id",
+          "management-version-id",
           "--yes",
         ],
       },
