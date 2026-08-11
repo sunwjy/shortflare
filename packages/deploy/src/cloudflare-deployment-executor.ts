@@ -5,7 +5,11 @@ import { z } from "zod";
 import type { CloudflareApi, CloudflareApiFailure, WorkerBinding } from "./cloudflare-api.js";
 import { writeD1Backup } from "./d1-backup.js";
 import type { DeploymentAction, DeploymentPlan } from "./deployment-plan.js";
-import type { DeploymentActionExecutor, DeploymentRecovery } from "./deployment-runner.js";
+import type {
+  DeploymentActionExecutor,
+  DeploymentCloudflareFailure,
+  DeploymentRecovery,
+} from "./deployment-runner.js";
 import type { ReleaseManifest } from "./release-manifest.js";
 import { prepareWorkerArtifacts } from "./resolved-worker-artifacts.js";
 import type { WranglerAdapter } from "./wrangler-adapter.js";
@@ -32,6 +36,8 @@ export type CloudflareDeploymentOutput = Readonly<{
   instanceId?: string;
   backup?: Readonly<{ path: string; sha256: string; bookmark: string }>;
   setupToken?: string;
+  managementAddress?: string;
+  redirectAddress?: string;
 }>;
 
 export function createCloudflareDeploymentExecutor(
@@ -41,6 +47,7 @@ export function createCloudflareDeploymentExecutor(
     accountId: string;
     existingDatabaseId?: string;
     existingInstanceId?: string;
+    previousWorkerVersions?: Readonly<{ management: string; redirect: string }>;
     setupToken?: string;
     releaseRoot: string;
     temporaryRoot: string;
@@ -60,12 +67,17 @@ export function createCloudflareDeploymentExecutor(
     getDatabaseId(): string | undefined;
     getInstanceId(): string | undefined;
     getSetupToken(): string | undefined;
+    getManagementAddress(): string | undefined;
+    getRedirectAddress(): string | undefined;
+    getBackup(): CloudflareDeploymentOutput["backup"];
   }> {
   let databaseId = input.existingDatabaseId;
   let artifacts: Awaited<ReturnType<typeof prepareWorkerArtifacts>> | undefined;
   let backup: CloudflareDeploymentOutput["backup"];
   let setupToken: string | undefined;
   let instanceId = input.existingInstanceId;
+  let managementAddress: string | undefined;
+  let redirectAddress: string | undefined;
 
   async function resolvedArtifacts() {
     if (artifacts !== undefined) return artifacts;
@@ -82,11 +94,20 @@ export function createCloudflareDeploymentExecutor(
     return artifacts;
   }
 
-  async function query(sql: string, parameters: readonly string[] = []) {
+  async function query(sql: string, parameters: readonly (string | null)[] = []) {
     if (databaseId === undefined) throw new Error("D1 is not available");
     const result = await input.api.queryD1(input.accountId, databaseId, sql, parameters);
     if (!result.ok) throw new CloudflareExecutionError(result);
     return result.rows;
+  }
+
+  async function queryMissingTableAsEmpty(sql: string): Promise<readonly unknown[]> {
+    try {
+      return await query(sql);
+    } catch (error: unknown) {
+      if (error instanceof CloudflareExecutionError && error.failure.status === 400) return [];
+      throw error;
+    }
   }
 
   return {
@@ -96,6 +117,8 @@ export function createCloudflareDeploymentExecutor(
         ...(instanceId === undefined ? {} : { instanceId }),
         ...(backup === undefined ? {} : { backup }),
         ...(setupToken === undefined ? {} : { setupToken }),
+        ...(managementAddress === undefined ? {} : { managementAddress }),
+        ...(redirectAddress === undefined ? {} : { redirectAddress }),
       };
     },
     getDatabaseId() {
@@ -107,10 +130,38 @@ export function createCloudflareDeploymentExecutor(
     getSetupToken() {
       return setupToken;
     },
+    getManagementAddress() {
+      return managementAddress;
+    },
+    getRedirectAddress() {
+      return redirectAddress;
+    },
+    getBackup() {
+      return backup;
+    },
+    actionMetadata(action) {
+      return (action.kind === "export-d1" ||
+        action.kind === "verify-backup" ||
+        action.kind === "apply-migrations") &&
+        backup !== undefined
+        ? { backup }
+        : undefined;
+    },
 
-    async revalidate(action) {
+    async checkpointValid(action, plan) {
+      try {
+        return (await validateCheckpoint(action, plan)) ? { ok: true } : { ok: false };
+      } catch {
+        return { ok: false };
+      }
+    },
+
+    async revalidate(action, plan) {
       if (action.kind === "create-d1") {
         const listed = await input.api.listD1Databases(input.accountId, resourceNames.database);
+        if (!listed.ok) {
+          return { ok: false, field: "d1.shortflare", ...cloudflareFailure(listed) };
+        }
         return listed.ok && listed.databases.length === 0
           ? { ok: true }
           : { ok: false, field: "d1.shortflare" };
@@ -118,12 +169,65 @@ export function createCloudflareDeploymentExecutor(
       if (action.kind === "configure-domain" && action.domain.kind === "custom-domain") {
         const hostname = action.domain.hostname;
         const domains = await input.api.listWorkerDomains(input.accountId);
-        if (!domains.ok) return { ok: false, field: `domain.${hostname}` };
+        if (!domains.ok) {
+          return { ok: false, field: `domain.${hostname}`, ...cloudflareFailure(domains) };
+        }
         const existing = domains.domains.find((domain) => domain.hostname === hostname);
         const expectedWorker = workerName(action.worker);
         return existing === undefined || existing.worker === expectedWorker
           ? { ok: true }
           : { ok: false, field: `domain.${hostname}` };
+      }
+      if (action.kind === "create-queue") {
+        const queues = await input.api.listQueues(input.accountId);
+        if (!queues.ok) {
+          return { ok: false, field: `queue.${action.resource}`, ...cloudflareFailure(queues) };
+        }
+        return queues.ok && !queues.queues.some((queue) => queue.name === action.resource)
+          ? { ok: true }
+          : { ok: false, field: `queue.${action.resource}` };
+      }
+      if (action.kind === "write-deployment-marker") {
+        const rows = await queryMissingTableAsEmpty(
+          "SELECT instance_id FROM deployment_marker WHERE singleton_key = 1",
+        );
+        return rows.length === 0 ? { ok: true } : { ok: false, field: "d1.deploymentMarker" };
+      }
+      if (action.kind === "apply-migrations") {
+        const rows = await queryMissingTableAsEmpty("SELECT name FROM d1_migrations ORDER BY id");
+        const known = new Set(input.manifest.schema.migrations);
+        const unexpected = rows.some((row) => {
+          const parsed = migrationRowSchema.safeParse(row);
+          return !parsed.success || !known.has(parsed.data.name);
+        });
+        return unexpected ? { ok: false, field: "d1.migrationJournal" } : { ok: true };
+      }
+      if (action.kind === "activate-worker") {
+        try {
+          await input.wrangler.resolveVersionId(
+            configFor(await resolvedArtifacts(), action.worker),
+            versionTag(plan, action.worker),
+          );
+          return { ok: true };
+        } catch {
+          return { ok: false, field: `worker.${action.worker}.uploadedVersion` };
+        }
+      }
+      if (action.kind === "record-coherent-release") {
+        const resolved = await resolvedArtifacts();
+        const [managementVersionId, redirectVersionId] = await Promise.all([
+          input.wrangler.resolveVersionId(
+            resolved.managementConfig,
+            versionTag(plan, "management"),
+          ),
+          input.wrangler.resolveVersionId(resolved.redirectConfig, versionTag(plan, "redirect")),
+        ]);
+        try {
+          await validateControlPlane(managementVersionId, redirectVersionId);
+          return { ok: true };
+        } catch {
+          return { ok: false, field: "release.controlPlane" };
+        }
       }
       return { ok: true };
     },
@@ -133,16 +237,216 @@ export function createCloudflareDeploymentExecutor(
         await applyAction(action, plan);
         return { ok: true };
       } catch (error: unknown) {
+        await rollbackAfterFailedVerification(action, plan);
         const retryable =
           error instanceof CloudflareExecutionError ? error.failure.retryable : true;
         return {
           ok: false,
           retryable,
           recovery: "rerun-deploy" as DeploymentRecovery,
+          ...(error instanceof CloudflareExecutionError ? cloudflareFailure(error.failure) : {}),
         };
       }
     },
   };
+
+  async function validateCheckpoint(
+    action: DeploymentAction,
+    plan: DeploymentPlan,
+  ): Promise<boolean> {
+    switch (action.kind) {
+      case "create-d1": {
+        const listed = await input.api.listD1Databases(input.accountId, resourceNames.database);
+        return (
+          listed.ok &&
+          listed.databases.some(
+            (database) => database.id === databaseId && database.name === resourceNames.database,
+          )
+        );
+      }
+      case "write-deployment-marker": {
+        const rows = await query(
+          "SELECT instance_id AS instanceId FROM deployment_marker WHERE singleton_key = 1",
+        );
+        return (
+          z.looseObject({ instanceId: z.string() }).safeParse(rows[0]).data?.instanceId ===
+          instanceId
+        );
+      }
+      case "create-queue": {
+        const queues = await input.api.listQueues(input.accountId);
+        return (
+          queues.ok &&
+          queues.queues.some(
+            (queue) =>
+              queue.name === action.resource &&
+              queue.settings.messageRetentionPeriod === queueRetentionSeconds,
+          )
+        );
+      }
+      case "configure-analytics-secret": {
+        const secrets = await input.api.listWorkerSecretNames(
+          input.accountId,
+          resourceNames.redirect,
+        );
+        return secrets.ok && secrets.names.includes("ANALYTICS_HMAC_KEY");
+      }
+      case "upload-worker": {
+        await input.wrangler.resolveVersionId(
+          configFor(await resolvedArtifacts(), action.worker),
+          versionTag(plan, action.worker),
+        );
+        return true;
+      }
+      case "activate-worker": {
+        const versionId = await input.wrangler.resolveVersionId(
+          configFor(await resolvedArtifacts(), action.worker),
+          versionTag(plan, action.worker),
+        );
+        const active = await input.api.listActiveWorkerVersions(
+          input.accountId,
+          workerName(action.worker),
+        );
+        return active.ok && active.versionIds.includes(versionId);
+      }
+      case "configure-domain": {
+        if (action.domain.kind === "workers-dev") {
+          const subdomain = await input.api.getWorkersSubdomain(input.accountId);
+          return subdomain.ok && subdomain.registered;
+        }
+        const domains = await input.api.listWorkerDomains(input.accountId);
+        const hostname = action.domain.hostname;
+        return (
+          domains.ok &&
+          domains.domains.some(
+            (domain) => domain.hostname === hostname && domain.worker === workerName(action.worker),
+          )
+        );
+      }
+      case "verify-worker":
+        await verifyWorker(action.worker);
+        return true;
+      case "apply-migrations": {
+        const rows = await query("SELECT name FROM d1_migrations ORDER BY id");
+        const applied = new Set(
+          rows.flatMap((row) => {
+            const parsed = migrationRowSchema.safeParse(row);
+            return parsed.success ? [parsed.data.name] : [];
+          }),
+        );
+        return action.migrations.every((migration) => applied.has(migration));
+      }
+      case "record-coherent-release": {
+        const rows = await query(
+          `SELECT release, manifest_sha256 AS manifestSha256
+           FROM coherent_release WHERE singleton_key = 1`,
+        );
+        const parsed = z
+          .looseObject({ release: z.string(), manifestSha256: z.string() })
+          .safeParse(rows[0]);
+        return (
+          parsed.success &&
+          parsed.data.release === plan.targetRelease &&
+          parsed.data.manifestSha256 === plan.targetManifestDigest
+        );
+      }
+      case "create-setup-handoff": {
+        const rows = await query(
+          `SELECT EXISTS(SELECT 1 FROM initial_setup WHERE singleton_key = 1) AS present`,
+        );
+        return z.looseObject({ present: z.literal(1) }).safeParse(rows[0]).success;
+      }
+      case "export-d1":
+      case "verify-backup":
+        return backup !== undefined;
+      case "recover":
+        return false;
+    }
+  }
+
+  async function rollbackAfterFailedVerification(
+    action: DeploymentAction,
+    plan: DeploymentPlan,
+  ): Promise<void> {
+    if (
+      action.kind !== "verify-worker" ||
+      plan.sourceRelease === "fresh" ||
+      !input.manifest.rollbackSafeFrom.includes(plan.sourceRelease) ||
+      !(await rollbackStillCompatible())
+    ) {
+      return;
+    }
+    // Redirect is activated only after Management. If Redirect verification fails,
+    // restore the whole coherent pair in reverse activation order so observation on
+    // the next run does not mistake the expected transition for critical drift.
+    const rollbackWorkers =
+      action.worker === "redirect"
+        ? (["redirect", "management"] as const)
+        : (["management"] as const);
+    try {
+      await rollbackWorkerAt(rollbackWorkers, 0);
+    } catch {
+      // The original verification failure remains authoritative; diagnosis exposes the live version.
+    }
+  }
+
+  async function rollbackWorkerAt(
+    workers: readonly ("management" | "redirect")[],
+    index: number,
+  ): Promise<void> {
+    const worker = workers[index];
+    if (worker === undefined) return;
+    const previousVersionId = input.previousWorkerVersions?.[worker];
+    if (previousVersionId === undefined) return;
+    const name = workerName(worker);
+    await input.wrangler.activateWorkerVersion(name, previousVersionId);
+    const active = await input.api.listActiveWorkerVersions(input.accountId, name);
+    if (!active.ok || !active.versionIds.includes(previousVersionId)) {
+      throw new Error(`Automatic ${worker} rollback failed verification`);
+    }
+    await rollbackWorkerAt(workers, index + 1);
+  }
+
+  async function rollbackStillCompatible(): Promise<boolean> {
+    if (databaseId === undefined) return false;
+    const [migrationRows, managementBindings, redirectBindings] = await Promise.all([
+      query("SELECT name FROM d1_migrations ORDER BY id"),
+      input.api.listWorkerBindings(input.accountId, resourceNames.management),
+      input.api.listWorkerBindings(input.accountId, resourceNames.redirect),
+    ]);
+    if (!managementBindings.ok || !redirectBindings.ok) return false;
+    const applied = new Set(
+      migrationRows.flatMap((row) => {
+        const parsed = migrationRowSchema.safeParse(row);
+        return parsed.success ? [parsed.data.name] : [];
+      }),
+    );
+    return (
+      input.manifest.schema.migrations.every((migration) => applied.has(migration)) &&
+      bindingsCompatible(managementBindings.bindings, redirectBindings.bindings)
+    );
+  }
+
+  function bindingsCompatible(
+    management: readonly WorkerBinding[],
+    redirect: readonly WorkerBinding[],
+  ): boolean {
+    const hasDatabase = (bindings: readonly WorkerBinding[]) =>
+      bindings.some(
+        (binding) =>
+          binding.type === "d1" && binding.name === "DB" && binding.databaseId === databaseId,
+      );
+    return (
+      hasDatabase(management) &&
+      hasDatabase(redirect) &&
+      redirect.some(
+        (binding) =>
+          binding.type === "queue" &&
+          binding.name === "ANALYTICS_QUEUE" &&
+          binding.queueName === "shortflare-events",
+      )
+    );
+  }
 
   async function applyAction(action: DeploymentAction, plan: DeploymentPlan): Promise<void> {
     switch (action.kind) {
@@ -248,7 +552,7 @@ export function createCloudflareDeploymentExecutor(
         await reconcileQueue(action.resource);
         return;
       case "configure-analytics-secret":
-        await reconcileAnalyticsSecret();
+        await reconcileAnalyticsSecret(plan);
         return;
       case "upload-worker": {
         const resolved = await resolvedArtifacts();
@@ -281,6 +585,10 @@ export function createCloudflareDeploymentExecutor(
           (await resolvedArtifacts()).managementConfig,
           backup.path,
           `${input.temporaryRoot}-backup-validation`,
+          {
+            instanceId: instanceId ?? "missing-instance",
+            sourceRelease: plan.sourceRelease,
+          },
         );
         return;
       case "record-coherent-release":
@@ -313,12 +621,18 @@ export function createCloudflareDeploymentExecutor(
     }
   }
 
-  async function reconcileAnalyticsSecret() {
+  async function reconcileAnalyticsSecret(plan: DeploymentPlan) {
     const listed = await input.api.listWorkerSecretNames(input.accountId, resourceNames.redirect);
     if (!listed.ok) throw new CloudflareExecutionError(listed);
     if (listed.names.includes("ANALYTICS_HMAC_KEY")) return;
     const value = Buffer.from(input.randomBytes(32)).toString("base64url");
-    await input.wrangler.putSecret(resourceNames.redirect, "ANALYTICS_HMAC_KEY", value);
+    // A versioned secret can be attached to an uploaded-but-not-yet-deployed Worker.
+    await input.wrangler.putVersionSecret(
+      resourceNames.redirect,
+      "ANALYTICS_HMAC_KEY",
+      value,
+      versionTag(plan, "redirect"),
+    );
   }
 
   async function reconcileDomain(action: Extract<DeploymentAction, { kind: "configure-domain" }>) {
@@ -355,7 +669,12 @@ export function createCloudflareDeploymentExecutor(
       const payload: unknown = await response.json().catch(() => undefined);
       return managementHealthSchema.safeParse(payload).success;
     });
-    if (worker === "redirect") await verifyActiveLink();
+    if (worker === "redirect") {
+      await verifyActiveLink();
+      redirectAddress = `https://${input.redirectDomain}`;
+    } else {
+      managementAddress = url.replace(/\/api\/internal\/health$/, "");
+    }
   }
 
   async function pollHealth(
@@ -427,9 +746,18 @@ export function createCloudflareDeploymentExecutor(
         return parsed.success ? [parsed.data.name] : [];
       }),
     );
+    const appliedInOrder = migrationRows.flatMap((row) => {
+      const parsed = migrationRowSchema.safeParse(row);
+      return parsed.success ? [parsed.data.name] : [];
+    });
     if (
       !marker.success ||
+      marker.data.instanceId !== instanceId ||
       input.manifest.schema.migrations.some((migration) => !applied.has(migration)) ||
+      appliedInOrder.length !== input.manifest.schema.migrations.length ||
+      appliedInOrder.some(
+        (migration, index) => migration !== input.manifest.schema.migrations[index],
+      ) ||
       !queues.ok ||
       !secrets.ok ||
       !domains.ok ||
@@ -447,17 +775,28 @@ export function createCloudflareDeploymentExecutor(
       }
     }
     const primaryQueue = queues.queues.find((candidate) => candidate.name === "shortflare-events");
-    if (
-      !primaryQueue?.producers.some(
-        (producer) => producer.type === "worker" && producer.script === resourceNames.redirect,
-      ) ||
-      !primaryQueue.consumers.some(
+    const deadLetterQueue = queues.queues.find(
+      (candidate) => candidate.name === "shortflare-events-dlq",
+    );
+    const matchingConsumers =
+      primaryQueue?.consumers.filter(
         (consumer) =>
           consumer.type === "worker" &&
           consumer.scriptName === resourceNames.management &&
           consumer.deadLetterQueue === "shortflare-events-dlq" &&
-          consumer.maxRetries === 3,
-      )
+          consumer.maxRetries === 3 &&
+          consumer.maxBatchSize === 10 &&
+          consumer.maxBatchTimeout === 1 &&
+          consumer.maxConcurrency === 1 &&
+          consumer.retryDelay === 60,
+      ) ?? [];
+    if (
+      !primaryQueue?.producers.some(
+        (producer) => producer.type === "worker" && producer.script === resourceNames.redirect,
+      ) ||
+      matchingConsumers.length !== 1 ||
+      primaryQueue.consumers.length !== 1 ||
+      deadLetterQueue?.consumers.length !== 0
     ) {
       throw new Error("Queue producer or consumer failed verification");
     }
@@ -534,8 +873,8 @@ export function createCloudflareDeploymentExecutor(
       `INSERT INTO coherent_release
          (singleton_key, release, schema_version, management_worker_version,
           redirect_worker_version, management_artifact_sha256,
-          redirect_artifact_sha256, manifest_sha256, recorded_at)
-       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+          redirect_artifact_sha256, migration_journal_sha256, manifest_sha256, recorded_at)
+       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(singleton_key) DO UPDATE SET
          release = excluded.release,
          schema_version = excluded.schema_version,
@@ -543,6 +882,7 @@ export function createCloudflareDeploymentExecutor(
          redirect_worker_version = excluded.redirect_worker_version,
          management_artifact_sha256 = excluded.management_artifact_sha256,
          redirect_artifact_sha256 = excluded.redirect_artifact_sha256,
+         migration_journal_sha256 = excluded.migration_journal_sha256,
          manifest_sha256 = excluded.manifest_sha256,
          recorded_at = excluded.recorded_at`,
       [
@@ -552,6 +892,7 @@ export function createCloudflareDeploymentExecutor(
         redirectVersionId,
         input.manifest.artifacts.management.sha256,
         input.manifest.artifacts.redirect.sha256,
+        input.manifest.schema.journalSha256,
         plan.targetManifestDigest,
         String(input.now().getTime()),
       ],
@@ -634,4 +975,26 @@ class CloudflareExecutionError extends Error {
     super(`Cloudflare operation failed with ${failure.kind}`);
     this.name = "CloudflareExecutionError";
   }
+}
+
+function cloudflareFailure(
+  failure: CloudflareApiFailure,
+): Readonly<{ failure?: DeploymentCloudflareFailure }> {
+  if (
+    failure.kind !== "cloudflare-authentication" &&
+    failure.kind !== "cloudflare-authorization" &&
+    failure.kind !== "cloudflare-transient"
+  ) {
+    return {};
+  }
+  return {
+    failure: {
+      kind: failure.kind,
+      retryable: failure.retryable,
+      ...(failure.resource === undefined ? {} : { resource: failure.resource }),
+      ...(failure.requiredPermission === undefined
+        ? {}
+        : { requiredPermission: failure.requiredPermission }),
+    },
+  };
 }

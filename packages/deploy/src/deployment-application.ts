@@ -3,6 +3,7 @@ import type { DeployCommand } from "./cli-contract.js";
 import type { RecoverCommand } from "./cli-contract.js";
 import {
   createDeploymentPlan,
+  observedStateDigest,
   type DeploymentPlan,
   type ObservedDeploymentState,
 } from "./deployment-plan.js";
@@ -18,6 +19,9 @@ type ApplicationExecutor = DeploymentActionExecutor &
     getDatabaseId(): string | undefined;
     getInstanceId?(): string | undefined;
     getSetupToken?(): string | undefined;
+    getManagementAddress?(): string | undefined;
+    getRedirectAddress?(): string | undefined;
+    getBackup?(): Readonly<{ path: string; sha256: string; bookmark: string }> | undefined;
   }>;
 
 export function createDeploymentApplication(
@@ -64,6 +68,9 @@ export function createDeploymentApplication(
           ? {}
           : { managementDomain: command.managementDomain }),
       });
+      const managementDomain =
+        command.managementDomain ??
+        (observed.kind === "present" ? observed.domains?.management : undefined);
       const needsAdministratorEmail =
         observed.kind === "absent" ||
         observed.coherentRelease === "fresh" ||
@@ -77,9 +84,7 @@ export function createDeploymentApplication(
         requested: {
           redirectDomain: required.redirectDomain,
           ...(administratorEmail === undefined ? {} : { administratorEmail }),
-          ...(command.managementDomain === undefined
-            ? {}
-            : { managementDomain: command.managementDomain }),
+          ...(managementDomain === undefined ? {} : { managementDomain }),
         },
       });
       if (!planned.ok) return { ok: false, exitCode: 3, error: planned };
@@ -105,11 +110,29 @@ export function createDeploymentApplication(
         };
       }
 
+      // Approval is bound to the observed source state. Re-observe immediately
+      // before mutation so account drift during an interactive review invalidates
+      // the approved plan instead of applying stale effects (ADR-0030).
+      const current = await input.observe(required.accountId, {
+        redirectDomain: required.redirectDomain,
+        ...(managementDomain === undefined ? {} : { managementDomain }),
+      });
+      if (observedStateDigest(current) !== planned.plan.sourceStateDigest) {
+        return {
+          ok: false,
+          exitCode: 3,
+          error: {
+            kind: "deployment-drift",
+            failedStage: "source-state",
+            retryable: false,
+            recovery: "regenerate-plan",
+          },
+        };
+      }
+
       const executor = input.createExecutor(observed, {
         redirectDomain: required.redirectDomain,
-        ...(command.managementDomain === undefined
-          ? {}
-          : { managementDomain: command.managementDomain }),
+        ...(managementDomain === undefined ? {} : { managementDomain }),
         ...(command.backupDirectory === undefined
           ? {}
           : { backupDirectory: command.backupDirectory }),
@@ -140,16 +163,22 @@ export function createDeploymentApplication(
           databaseId,
           ...(instanceId === undefined ? {} : { instanceId }),
           redirectDomain: required.redirectDomain,
-          ...(command.managementDomain === undefined
-            ? {}
-            : { managementDomain: command.managementDomain }),
+          ...(managementDomain === undefined ? {} : { managementDomain }),
           release: planned.plan.targetRelease,
         });
       }
       const newSetupToken = command.mode === "human" ? executor.getSetupToken?.() : undefined;
-      return result.ok && newSetupToken !== undefined
-        ? { ...result, setupToken: newSetupToken }
-        : result;
+      if (!result.ok) return result;
+      const managementAddress = executor.getManagementAddress?.();
+      const redirectAddress = executor.getRedirectAddress?.();
+      const backup = executor.getBackup?.();
+      return {
+        ...result,
+        ...(newSetupToken === undefined ? {} : { setupToken: newSetupToken }),
+        ...(managementAddress === undefined ? {} : { managementAddress }),
+        ...(redirectAddress === undefined ? {} : { redirectAddress }),
+        ...(backup === undefined ? {} : { backup }),
+      };
     },
 
     async diagnose(command) {

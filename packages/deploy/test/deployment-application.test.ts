@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { createDeploymentApplication } from "../src/deployment-application";
 import type { DeploymentActionExecutor, DeploymentAttemptJournal } from "../src/deployment-runner";
+import { releaseOwnershipPolicy } from "../src/release-manifest";
 
 describe("Deployment application", () => {
   it("bootstraps fresh D1 before starting the durable resumable attempt", async () => {
@@ -10,6 +11,7 @@ describe("Deployment application", () => {
     let journalDatabaseId: string | undefined;
     const executor: DeploymentActionExecutor & { getDatabaseId(): string | undefined } = {
       getDatabaseId: () => "database-1",
+      checkpointValid: async () => ({ ok: true }),
       revalidate: async () => ({ ok: true }),
       apply: async (action) => {
         applied.push(action.kind);
@@ -95,6 +97,46 @@ describe("Deployment application", () => {
     expect(result.finalState).toBe("planned");
     expect(result.plan).toMatchObject({ operation: "install", sourceRelease: "fresh" });
   });
+
+  it("invalidates approval when the observed source state changes before mutation", async () => {
+    let observations = 0;
+    const application = createDeploymentApplication({
+      manifest: releaseManifest(),
+      observe: async () => {
+        observations += 1;
+        return {
+          kind: "absent" as const,
+          accountId: "account-1",
+          workersDevRegistered: true,
+          collisions: observations === 1 ? [] : ["worker:foreign"],
+        };
+      },
+      createExecutor: () => {
+        throw new Error("must not create executor after drift");
+      },
+      createJournal: () => {
+        throw new Error("must not create journal after drift");
+      },
+      writeConfig: async () => undefined,
+    });
+
+    const result = await application.deploy({
+      kind: "deploy",
+      mode: "json",
+      approval: { kind: "non-destructive" },
+      dryRun: false,
+      setupTokenFromStdin: true,
+      accountId: "account-1",
+      redirectDomain: "go.example.com",
+      administratorEmail: "owner@example.com",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      exitCode: 3,
+      error: { kind: "deployment-drift", failedStage: "source-state" },
+    });
+  });
 });
 
 function releaseManifest() {
@@ -108,6 +150,7 @@ function releaseManifest() {
     },
     supportedSources: ["fresh" as const],
     rollbackSafeFrom: [],
+    ownership: releaseOwnershipPolicy,
     artifacts: {
       management: { path: "release/management", sha256: "2".repeat(64) },
       redirect: { path: "release/redirect", sha256: "3".repeat(64) },

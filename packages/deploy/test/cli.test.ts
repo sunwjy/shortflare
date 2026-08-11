@@ -61,6 +61,37 @@ describe("shortflare command entrypoint", () => {
     });
   });
 
+  it("prints both live addresses and the one-time setup token after install", async () => {
+    const stdout: string[] = [];
+    const exitCode = await runCli(
+      ["deploy", "--yes", "--account-id", "account-1", "--redirect-domain", "go.example.com"],
+      {
+        async deploy() {
+          return {
+            ok: true,
+            managementAddress: "https://shortflare-management.owner.workers.dev",
+            redirectAddress: "https://go.example.com",
+            setupToken: "setup-token",
+          };
+        },
+        async diagnose() {
+          throw new Error("not called");
+        },
+        async recover() {
+          throw new Error("not called");
+        },
+      },
+      { stdout: (text) => stdout.push(text), stderr: () => undefined },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.join("\n")).toContain(
+      "Management: https://shortflare-management.owner.workers.dev",
+    );
+    expect(stdout.join("\n")).toContain("Redirect: https://go.example.com");
+    expect(stdout.join("\n")).toContain("One-time setup token: setup-token");
+  });
+
   it("rejects unsupported Node before accessing the application", async () => {
     const stderr: string[] = [];
     const exitCode = await runCli(

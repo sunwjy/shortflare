@@ -4,6 +4,7 @@ import {
   type DiagnoseCommand,
   type RecoverCommand,
 } from "./cli-contract.js";
+import { CloudflareObservationError } from "./cloudflare-observer.js";
 
 export type CliApplicationResult = Readonly<{
   ok: boolean;
@@ -36,12 +37,32 @@ export async function runCli(
     return parsed.exitCode;
   }
 
-  const result =
-    parsed.command.kind === "deploy"
-      ? await application.deploy(parsed.command)
-      : parsed.command.kind === "diagnose"
-        ? await application.diagnose(parsed.command)
-        : await application.recover(parsed.command);
+  let result: CliApplicationResult;
+  try {
+    result =
+      parsed.command.kind === "deploy"
+        ? await application.deploy(parsed.command)
+        : parsed.command.kind === "diagnose"
+          ? await application.diagnose(parsed.command)
+          : await application.recover(parsed.command);
+  } catch (error: unknown) {
+    if (!(error instanceof CloudflareObservationError)) throw error;
+    const failure = error.failure;
+    result = {
+      ok: false,
+      exitCode: failure.kind === "cloudflare-authentication" ? 6 : 7,
+      error: {
+        kind: failure.kind,
+        failedStage: "observation",
+        retryable: failure.retryable,
+        recovery: "fix-cloudflare-access",
+        ...(failure.resource === undefined ? {} : { resource: failure.resource }),
+        ...(failure.requiredPermission === undefined
+          ? {}
+          : { requiredPermission: failure.requiredPermission }),
+      },
+    };
+  }
   if (parsed.command.mode === "json") {
     output.stdout(`${JSON.stringify(result)}\n`);
   } else {
@@ -70,9 +91,19 @@ function renderHumanResult(
     if (command === "recover" && typeof result.plan === "object") {
       return `Shortflare recovery plan:\n${JSON.stringify(result.plan, null, 2)}`;
     }
-    return typeof setupToken === "string"
-      ? `Shortflare ${command} completed.\nOne-time setup token: ${setupToken}`
-      : `Shortflare ${command} completed.`;
+    if (command === "deploy") {
+      const addresses = [
+        typeof result.managementAddress === "string"
+          ? `Management: ${result.managementAddress}`
+          : undefined,
+        typeof result.redirectAddress === "string"
+          ? `Redirect: ${result.redirectAddress}`
+          : undefined,
+        typeof setupToken === "string" ? `One-time setup token: ${setupToken}` : undefined,
+      ].filter((line): line is string => line !== undefined);
+      return [`Shortflare ${command} completed.`, ...addresses].join("\n");
+    }
+    return `Shortflare ${command} completed.`;
   }
   const error = result.error;
   if (

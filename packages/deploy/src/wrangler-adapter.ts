@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { lstat, rm } from "node:fs/promises";
+import path from "node:path";
 
 export type WranglerRun = (
   arguments_: readonly string[],
@@ -51,6 +53,26 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
     async putSecret(workerName: string, secretName: string, value: string): Promise<void> {
       await checkedRun(["secret", "put", secretName, "--name", workerName], { stdin: value });
     },
+    async putVersionSecret(
+      workerName: string,
+      secretName: string,
+      value: string,
+      versionTag: string,
+    ): Promise<void> {
+      await checkedRun(
+        [
+          "versions",
+          "secret",
+          "put",
+          secretName,
+          "--name",
+          workerName,
+          "--tag",
+          `${versionTag}-secret`,
+        ],
+        { stdin: value },
+      );
+    },
     async activateWorkerTag(workerName: string, versionTag: string): Promise<void> {
       await checkedRun([
         "versions",
@@ -59,6 +81,17 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
         workerName,
         "--version-tag",
         versionTag,
+        "--yes",
+      ]);
+    },
+    async activateWorkerVersion(workerName: string, versionId: string): Promise<void> {
+      await checkedRun([
+        "versions",
+        "deploy",
+        "--name",
+        workerName,
+        "--version-id",
+        versionId,
         "--yes",
       ]);
     },
@@ -75,6 +108,7 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
       configPath: string,
       backupPath: string,
       persistenceDirectory: string,
+      expected: Readonly<{ instanceId: string; sourceRelease: string }>,
     ): Promise<void> {
       const localArguments = [
         "--local",
@@ -83,28 +117,21 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
         "--config",
         configPath,
       ];
-      await checkedRun([
-        "d1",
-        "execute",
-        "shortflare",
-        "--file",
-        backupPath,
-        "--yes",
-        ...localArguments,
-      ]);
-      await checkedRun(["d1", "migrations", "apply", "shortflare", ...localArguments]);
-      const verified = await checkedRun([
-        "d1",
-        "execute",
-        "shortflare",
-        "--command",
-        backupInvariantSql,
-        "--json",
-        ...localArguments,
-      ]);
-      const parsed = backupVerificationSchema.safeParse(JSON.parse(verified.stdout));
-      if (!parsed.success || parsed.data[0]?.results[0]?.valid !== 1) {
-        throw new WranglerCommandError("D1 backup verification");
+      try {
+        await checkedRun([
+          "d1",
+          "execute",
+          "shortflare",
+          "--file",
+          backupPath,
+          "--yes",
+          ...localArguments,
+        ]);
+        await assertBackupInvariants(localArguments, expected, "source");
+        await checkedRun(["d1", "migrations", "apply", "shortflare", ...localArguments]);
+        await assertBackupInvariants(localArguments, expected, "target");
+      } finally {
+        await removeBackupValidationDirectory(persistenceDirectory);
       }
     },
     async resolveVersionId(configPath: string, versionTag: string): Promise<string> {
@@ -119,6 +146,26 @@ export function createWranglerAdapter(input: Readonly<{ run: WranglerRun }>) {
   async function resolveVersionId(configPath: string, versionTag: string): Promise<string> {
     const listed = await checkedRun(["versions", "list", "--config", configPath, "--json"]);
     return findVersionId(listed.stdout, versionTag);
+  }
+
+  async function assertBackupInvariants(
+    localArguments: readonly string[],
+    expected: Readonly<{ instanceId: string; sourceRelease: string }>,
+    phase: "source" | "target",
+  ): Promise<void> {
+    const verified = await checkedRun([
+      "d1",
+      "execute",
+      "shortflare",
+      "--command",
+      backupInvariantSql(expected),
+      "--json",
+      ...localArguments,
+    ]);
+    const parsed = backupVerificationSchema.safeParse(JSON.parse(verified.stdout));
+    if (!parsed.success || parsed.data[0]?.results[0]?.valid !== 1) {
+      throw new WranglerCommandError(`D1 backup ${phase} verification`);
+    }
   }
 }
 
@@ -145,15 +192,62 @@ const workerVersionSchema = z.looseObject({
   annotations: z.record(z.string(), z.string()).optional(),
 });
 
-const backupInvariantSql = `SELECT CASE WHEN
+function backupInvariantSql(expected: Readonly<{ instanceId: string; sourceRelease: string }>) {
+  const instanceId = sqlString(expected.instanceId);
+  const sourceRelease = sqlString(expected.sourceRelease);
+  return `SELECT CASE WHEN
   (SELECT COUNT(*) FROM deployment_marker) = 1 AND
+  (SELECT instance_id FROM deployment_marker WHERE singleton_key = 1) = ${instanceId} AND
+  (SELECT release FROM coherent_release WHERE singleton_key = 1) = ${sourceRelease} AND
   (SELECT COUNT(*) FROM instances) = 1 AND
   (SELECT COUNT(*) FROM users WHERE state = 'active' AND role = 'administrator') >= 1 AND
+  (SELECT COUNT(*) FROM audit_events) >= 1 AND
+  NOT EXISTS (SELECT 1 FROM pragma_foreign_key_check) AND
   NOT EXISTS (
     SELECT 1 FROM destination_versions d
     LEFT JOIN links l ON l.id = d.link_id WHERE l.id IS NULL
+  ) AND
+  NOT EXISTS (
+    SELECT 1 FROM analytics_events e
+    LEFT JOIN links l ON l.id = e.link_id
+    LEFT JOIN destination_versions d ON d.id = e.destination_version_id
+    WHERE l.id IS NULL OR d.id IS NULL OR d.link_id <> e.link_id
+  ) AND
+  NOT EXISTS (
+    SELECT 1 FROM analytics_uniques u
+    LEFT JOIN links l ON l.id = u.link_id
+    LEFT JOIN destination_versions d ON d.id = u.destination_version_id
+    WHERE l.id IS NULL OR (u.destination_version_id IS NOT NULL AND d.id IS NULL)
+  ) AND
+  NOT EXISTS (
+    SELECT 1 FROM analytics_rollups r
+    LEFT JOIN links l ON l.id = r.link_id
+    LEFT JOIN destination_versions d ON d.id = r.destination_version_id
+    WHERE l.id IS NULL OR (r.destination_version_id IS NOT NULL AND d.id IS NULL)
+       OR r.human_clicks < 0 OR r.unique_human_clicks < 0 OR r.suspected_bot_clicks < 0
   )
 THEN 1 ELSE 0 END AS valid`;
+}
+
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+async function removeBackupValidationDirectory(directory: string): Promise<void> {
+  const resolved = path.resolve(directory);
+  if (!path.basename(resolved).endsWith("-backup-validation")) {
+    throw new WranglerCommandError("unsafe backup validation cleanup target");
+  }
+  const status = await lstat(resolved).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (status === undefined) return;
+  if (!status.isDirectory() || status.isSymbolicLink()) {
+    throw new WranglerCommandError("unsafe backup validation cleanup target");
+  }
+  await rm(resolved, { recursive: true });
+}
 
 export type WranglerAdapter = ReturnType<typeof createWranglerAdapter>;
 

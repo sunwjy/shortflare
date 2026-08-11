@@ -1,10 +1,11 @@
 import { z } from "zod";
 
 import type { DeploymentAttemptJournal, DeploymentFailure } from "./deployment-runner.js";
+import type { DeploymentAction, DeploymentPlan } from "./deployment-plan.js";
 
 export type D1DeploymentQuery = (
   sql: string,
-  parameters: readonly string[],
+  parameters: readonly (string | null)[],
 ) => Promise<readonly unknown[]>;
 
 export class DeploymentLeaseConflictError extends Error {
@@ -19,6 +20,7 @@ const attemptRowSchema = z.looseObject({
   completedActions: z.string(),
 });
 const leaseRowSchema = z.looseObject({ fencingToken: z.number().int().positive() });
+const tableColumnSchema = z.looseObject({ name: z.string() });
 
 export function createD1DeploymentJournal(
   input: Readonly<{
@@ -29,10 +31,12 @@ export function createD1DeploymentJournal(
   }>,
 ): DeploymentAttemptJournal {
   const leaseDurationMs = input.leaseDurationMs ?? 60_000;
+  const activePlans = new Map<string, DeploymentPlan>();
 
   return {
     async begin(plan) {
       const now = input.now().getTime();
+      const hasDetailedJournal = await hasDetailedAttemptJournal(input);
       const existingRows = await input.query(
         `SELECT id, completed_actions AS completedActions
          FROM deployment_attempts
@@ -68,20 +72,13 @@ export function createD1DeploymentJournal(
           [String(now), attemptId],
         );
       } else {
-        await input.query(
-          `INSERT INTO deployment_attempts
-             (id, plan_digest, source_release, target_release, status,
-              completed_actions, started_at, updated_at)
-           VALUES (?, ?, ?, ?, 'running', ?, ?, ?)`,
-          [
-            attemptId,
-            plan.digest,
-            plan.sourceRelease,
-            plan.targetRelease,
-            JSON.stringify(completedActionIndexes),
-            String(now),
-            String(now),
-          ],
+        await insertAttempt(
+          input,
+          plan,
+          attemptId,
+          completedActionIndexes,
+          now,
+          hasDetailedJournal,
         );
       }
 
@@ -99,6 +96,7 @@ export function createD1DeploymentJournal(
       );
       const lease = leaseRowSchema.safeParse(leaseRows[0]);
       if (!lease.success) throw new DeploymentLeaseConflictError();
+      activePlans.set(attemptId, plan);
       return { attemptId, completedActionIndexes, fencingToken: lease.data.fencingToken };
     },
 
@@ -113,12 +111,47 @@ export function createD1DeploymentJournal(
       return leaseRowSchema.safeParse(rows[0]).success ? { ok: true } : { ok: false };
     },
 
-    async recordActionCompleted(attemptId, actionIndex) {
+    async recordActionCompleted(attemptId, actionIndex, action, metadata) {
+      const now = String(input.now().getTime());
+      const plan = activePlans.get(attemptId);
+      if (plan === undefined) throw new Error("Deployment Attempt plan identity is unavailable");
+      if (!(await hasDetailedAttemptJournal(input))) {
+        await input.query(
+          `UPDATE deployment_attempts
+           SET completed_actions = json_insert(completed_actions, '$[#]', json(?)), updated_at = ?
+           WHERE id = ? AND status = 'running'`,
+          [String(actionIndex), now, attemptId],
+        );
+        return;
+      }
       await input.query(
         `UPDATE deployment_attempts
-         SET completed_actions = json_insert(completed_actions, '$[#]', json(?)), updated_at = ?
+         SET completed_actions = json_insert(completed_actions, '$[#]', json(?)),
+             stage_outcomes = json_insert(stage_outcomes, '$[#]', json(?)),
+             backup_bookmark = COALESCE(NULLIF(?, ''), backup_bookmark),
+             backup_path = COALESCE(NULLIF(?, ''), backup_path),
+             backup_sha256 = COALESCE(NULLIF(?, ''), backup_sha256),
+             recovery_action = COALESCE(NULLIF(?, ''), recovery_action),
+             target_manifest_digest = ?,
+             source_state_digest = ?,
+             target_schema_version = ?,
+             target_artifact_digests = ?,
+             updated_at = ?
          WHERE id = ? AND status = 'running'`,
-        [String(actionIndex), String(input.now().getTime()), attemptId],
+        [
+          String(actionIndex),
+          JSON.stringify({ index: actionIndex, stage: action.kind, completedAt: Number(now) }),
+          metadata?.backup?.bookmark ?? "",
+          metadata?.backup?.path ?? "",
+          metadata?.backup?.sha256 ?? "",
+          action.kind === "recover" ? action.action : "",
+          plan.targetManifestDigest,
+          plan.sourceStateDigest,
+          String(plan.targetSchemaVersion),
+          JSON.stringify(plan.targetArtifactDigests),
+          now,
+          attemptId,
+        ],
       );
     },
 
@@ -130,6 +163,7 @@ export function createD1DeploymentJournal(
       await input.query("DELETE FROM deployment_lease WHERE singleton_key = 1 AND attempt_id = ?", [
         attemptId,
       ]);
+      activePlans.delete(attemptId);
     },
 
     async fail(attemptId, failure) {
@@ -137,8 +171,82 @@ export function createD1DeploymentJournal(
       await input.query("DELETE FROM deployment_lease WHERE singleton_key = 1 AND attempt_id = ?", [
         attemptId,
       ]);
+      activePlans.delete(attemptId);
     },
   };
+}
+
+async function hasDetailedAttemptJournal(
+  input: Readonly<{ query: D1DeploymentQuery }>,
+): Promise<boolean> {
+  const columns = await deploymentAttemptColumns(input);
+  return columns.has("stage_outcomes");
+}
+
+async function deploymentAttemptColumns(
+  input: Readonly<{ query: D1DeploymentQuery }>,
+): Promise<ReadonlySet<string>> {
+  const rows = await input.query("PRAGMA table_info(deployment_attempts)", []);
+  return new Set(
+    rows.flatMap((row) => {
+      const parsed = tableColumnSchema.safeParse(row);
+      return parsed.success ? [parsed.data.name] : [];
+    }),
+  );
+}
+
+async function insertAttempt(
+  input: Readonly<{ query: D1DeploymentQuery }>,
+  plan: DeploymentPlan,
+  attemptId: string,
+  completedActionIndexes: readonly number[],
+  now: number,
+  detailed: boolean,
+): Promise<void> {
+  if (!detailed) {
+    await input.query(
+      `INSERT INTO deployment_attempts
+         (id, plan_digest, source_release, target_release, status,
+          completed_actions, started_at, updated_at)
+       VALUES (?, ?, ?, ?, 'running', ?, ?, ?)`,
+      [
+        attemptId,
+        plan.digest,
+        plan.sourceRelease,
+        plan.targetRelease,
+        JSON.stringify(completedActionIndexes),
+        String(now),
+        String(now),
+      ],
+    );
+    return;
+  }
+  await input.query(
+    `INSERT INTO deployment_attempts
+       (id, plan_digest, source_release, target_release, target_manifest_digest,
+        source_state_digest, target_schema_version, target_artifact_digests,
+        status, completed_actions, stage_outcomes, recovery_action, started_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, '[]', NULLIF(?, ''), ?, ?)`,
+    [
+      attemptId,
+      plan.digest,
+      plan.sourceRelease,
+      plan.targetRelease,
+      plan.targetManifestDigest,
+      plan.sourceStateDigest,
+      String(plan.targetSchemaVersion),
+      JSON.stringify(plan.targetArtifactDigests),
+      JSON.stringify(completedActionIndexes),
+      recoveryAction(plan.actions),
+      String(now),
+      String(now),
+    ],
+  );
+}
+
+function recoveryAction(actions: readonly DeploymentAction[]): string {
+  const action = actions.find((candidate) => candidate.kind === "recover");
+  return action?.kind === "recover" ? action.action : "";
 }
 
 function parseCompletedActions(serialized: string): readonly number[] {
@@ -151,10 +259,54 @@ async function recordFailure(
   attemptId: string,
   failure: DeploymentFailure,
 ): Promise<void> {
+  const completedAt = input.now().getTime();
+  const columns = await deploymentAttemptColumns(input);
+  if (
+    columns.has("stage_outcomes") &&
+    columns.has("failure_resource") &&
+    columns.has("required_permission")
+  ) {
+    await input.query(
+      `UPDATE deployment_attempts
+       SET status = 'failed', failure_kind = ?, failed_stage = ?,
+           stage_outcomes = json_insert(stage_outcomes, '$[#]', json(?)),
+           recovery_action = ?, failure_resource = ?, required_permission = ?, updated_at = ?
+       WHERE id = ?`,
+      [
+        failure.kind,
+        failure.stage,
+        JSON.stringify({ stage: failure.stage, failedAt: completedAt, kind: failure.kind }),
+        failure.recovery,
+        failure.resource ?? null,
+        failure.requiredPermission ?? null,
+        String(completedAt),
+        attemptId,
+      ],
+    );
+    return;
+  }
+  if (columns.has("stage_outcomes")) {
+    await input.query(
+      `UPDATE deployment_attempts
+       SET status = 'failed', failure_kind = ?, failed_stage = ?,
+           stage_outcomes = json_insert(stage_outcomes, '$[#]', json(?)),
+           recovery_action = ?, updated_at = ?
+       WHERE id = ?`,
+      [
+        failure.kind,
+        failure.stage,
+        JSON.stringify({ stage: failure.stage, failedAt: completedAt, kind: failure.kind }),
+        failure.recovery,
+        String(completedAt),
+        attemptId,
+      ],
+    );
+    return;
+  }
   await input.query(
     `UPDATE deployment_attempts
      SET status = 'failed', failure_kind = ?, failed_stage = ?, updated_at = ?
      WHERE id = ?`,
-    [failure.kind, failure.stage, String(input.now().getTime()), attemptId],
+    [failure.kind, failure.stage, String(completedAt), attemptId],
   );
 }

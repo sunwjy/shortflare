@@ -34,6 +34,8 @@ describe("release assembly", () => {
       redirectBuild,
       migrationsDirectory,
       release: "1.0.0",
+      supportedSources: ["fresh", "0.9.0"],
+      rollbackSafeFrom: ["0.9.0"],
     });
 
     await expect(verifyReleaseBundle(packageRoot, manifest)).resolves.toEqual({ ok: true });
@@ -43,5 +45,6 @@ describe("release assembly", () => {
     expect(
       JSON.parse(await readFile(path.join(packageRoot, "release", "manifest.json"), "utf8")),
     ).toEqual(manifest);
+    expect(manifest.supportedSources).toEqual(["fresh", "0.9.0"]);
   });
 });

@@ -15,6 +15,8 @@ export type ExistingInstanceState = Readonly<{
   databaseId?: string;
   instanceId: string;
   coherentRelease: string;
+  coherentWorkerVersions?: Readonly<{ management: string; redirect: string }>;
+  domains?: Readonly<{ redirect?: string; management?: string }>;
   schemaVersion: number;
   pendingMigrations: readonly string[];
   analyticsSecret: "present" | "missing";
@@ -76,6 +78,13 @@ export type DeploymentPlan = Readonly<{
   sourceRelease: "fresh" | string;
   targetRelease: string;
   targetManifestDigest: string;
+  sourceStateDigest: string;
+  targetSchemaVersion: number;
+  targetArtifactDigests: Readonly<{
+    management: string;
+    redirect: string;
+    migrations: string;
+  }>;
   destructive: boolean;
   actions: readonly DeploymentAction[];
   digest: string;
@@ -130,6 +139,15 @@ export function createDeploymentPlan(
     requested: DeploymentRequest;
   }>,
 ): CreateDeploymentPlanResult {
+  const sourceStateDigest = observedStateDigest(input.observed);
+  const targetIdentity = {
+    targetSchemaVersion: input.target.schema.version,
+    targetArtifactDigests: {
+      management: input.target.artifacts.management.sha256,
+      redirect: input.target.artifacts.redirect.sha256,
+      migrations: input.target.artifacts.migrations.sha256,
+    },
+  };
   const requiresAdministratorEmail =
     input.observed.kind === "absent" ||
     input.observed.coherentRelease === "fresh" ||
@@ -142,6 +160,25 @@ export function createDeploymentPlan(
     };
   }
   if (input.observed.kind === "present") {
+    const changedDomains = [
+      ...(input.observed.domains?.redirect === undefined ||
+      input.observed.domains.redirect === input.requested.redirectDomain
+        ? []
+        : ["domain.redirect"]),
+      ...(input.requested.managementDomain === undefined ||
+      input.observed.domains?.management === undefined ||
+      input.observed.domains.management === input.requested.managementDomain
+        ? []
+        : ["domain.management"]),
+    ];
+    if (changedDomains.length > 0) {
+      return {
+        ok: false,
+        kind: "critical-drift",
+        fields: changedDomains,
+        recovery: "diagnose-and-recover",
+      };
+    }
     const targetsCurrentRelease = input.observed.coherentRelease === input.target.release;
     if (
       input.observed.schemaVersion > input.target.schema.version ||
@@ -190,6 +227,8 @@ export function createDeploymentPlan(
           sourceRelease: "fresh",
           targetRelease: input.target.release,
           targetManifestDigest: hashReleaseManifest(input.target),
+          sourceStateDigest,
+          ...targetIdentity,
           destructive: false,
           actions: installActions(input, false),
         }),
@@ -218,6 +257,8 @@ export function createDeploymentPlan(
           sourceRelease: input.observed.coherentRelease,
           targetRelease: input.target.release,
           targetManifestDigest: hashReleaseManifest(input.target),
+          sourceStateDigest,
+          ...targetIdentity,
           destructive: false,
           actions: [
             {
@@ -242,6 +283,8 @@ export function createDeploymentPlan(
           sourceRelease: input.observed.coherentRelease,
           targetRelease: input.target.release,
           targetManifestDigest: hashReleaseManifest(input.target),
+          sourceStateDigest,
+          ...targetIdentity,
           destructive: false,
           actions: [],
         }),
@@ -256,6 +299,8 @@ export function createDeploymentPlan(
         sourceRelease: input.observed.coherentRelease,
         targetRelease: input.target.release,
         targetManifestDigest: hashReleaseManifest(input.target),
+        sourceStateDigest,
+        ...targetIdentity,
         destructive: false,
         actions: [
           ...(input.observed.pendingMigrations.length > 0
@@ -324,10 +369,16 @@ export function createDeploymentPlan(
       sourceRelease: "fresh",
       targetRelease: input.target.release,
       targetManifestDigest: hashReleaseManifest(input.target),
+      sourceStateDigest,
+      ...targetIdentity,
       destructive: false,
       actions: installActions(input, true),
     }),
   };
+}
+
+export function observedStateDigest(observed: ObservedDeploymentState): string {
+  return createHash("sha256").update(JSON.stringify(observed)).digest("hex");
 }
 
 function installActions(

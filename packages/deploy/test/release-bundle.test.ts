@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { hashReleaseArtifact, verifyReleaseBundle } from "../src/release-bundle";
-import { parseReleaseManifest } from "../src/release-manifest";
+import { parseReleaseManifest, releaseOwnershipPolicy } from "../src/release-manifest";
 
 describe("packed release bundle", () => {
   it("verifies every declared file and directory before observation", async () => {
@@ -27,6 +27,7 @@ describe("packed release bundle", () => {
       },
       supportedSources: ["fresh"],
       rollbackSafeFrom: [],
+      ownership: releaseOwnershipPolicy,
       artifacts: {
         management: {
           path: "artifacts/management",

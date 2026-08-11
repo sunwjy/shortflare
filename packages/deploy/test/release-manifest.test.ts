@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseReleaseManifest } from "../src/index";
+import { parseReleaseManifest, releaseOwnershipPolicy } from "../src/index";
 
 describe("Shortflare Release manifest", () => {
   it("accepts one self-contained stable release", () => {
@@ -14,6 +14,7 @@ describe("Shortflare Release manifest", () => {
       },
       supportedSources: ["fresh", "0.9.0"],
       rollbackSafeFrom: ["0.9.0"],
+      ownership: releaseOwnershipPolicy,
       artifacts: {
         management: {
           path: "artifacts/management/index.js",
@@ -47,6 +48,7 @@ describe("Shortflare Release manifest", () => {
       },
       supportedSources: ["fresh"],
       rollbackSafeFrom: [],
+      ownership: releaseOwnershipPolicy,
       artifacts: {
         management: {
           path: "../management/index.js",

@@ -23,6 +23,30 @@ const artifactSchema = z.strictObject({
 });
 const migrationNameSchema = z.string().regex(/^\d{4}_[a-z0-9_]+\.sql$/);
 
+const invariantPolicies = ["d1-bindings", "queue-delivery", "worker-identities"] as const;
+const ownerSettingPolicies = ["analytics-cleanup-schedule", "management-domain"] as const;
+const criticalDriftPolicies = [
+  "worker-code",
+  "migration-history",
+  "queue-consumers",
+  "deployment-marker",
+] as const;
+const foreignStatePolicies = ["unexpected-routes", "dns-records", "unmarked-resources"] as const;
+
+export const releaseOwnershipPolicy = {
+  invariants: [...invariantPolicies],
+  ownerSettings: [...ownerSettingPolicies],
+  criticalDrift: [...criticalDriftPolicies],
+  foreignState: [...foreignStatePolicies],
+};
+
+const ownershipSchema = z.strictObject({
+  invariants: z.array(z.enum(invariantPolicies)),
+  ownerSettings: z.array(z.enum(ownerSettingPolicies)),
+  criticalDrift: z.array(z.enum(criticalDriftPolicies)),
+  foreignState: z.array(z.enum(foreignStatePolicies)),
+});
+
 const releaseManifestSchema = z.strictObject({
   formatVersion: z.literal(1),
   release: semverSchema,
@@ -33,6 +57,7 @@ const releaseManifestSchema = z.strictObject({
   }),
   supportedSources: z.array(z.union([z.literal("fresh"), semverSchema])).min(1),
   rollbackSafeFrom: z.array(semverSchema),
+  ownership: ownershipSchema,
   artifacts: z.strictObject({
     management: artifactSchema,
     redirect: artifactSchema,

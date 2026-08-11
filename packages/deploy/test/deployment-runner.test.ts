@@ -32,6 +32,10 @@ describe("Deployment Plan runner", () => {
         },
       },
       executor: {
+        async checkpointValid(action) {
+          calls.push(`checkpoint:${action.kind}`);
+          return { ok: true };
+        },
         async revalidate(action) {
           calls.push(`check:${action.kind}`);
           return { ok: true };
@@ -55,6 +59,8 @@ describe("Deployment Plan runner", () => {
     });
     expect(calls).toEqual([
       "begin",
+      "lease:attempt-1:7",
+      "checkpoint:write-deployment-marker",
       "lease:attempt-1:7",
       "check:upload-worker",
       "apply:upload-worker",
@@ -154,6 +160,53 @@ describe("Deployment Plan runner", () => {
     expect(applied).toBe(false);
   });
 
+  it("preserves authorization detail and its stable exit category after planning", async () => {
+    const result = await runDeploymentPlan({
+      plan: deploymentPlan(),
+      approval: { kind: "non-destructive" },
+      dryRun: false,
+      journal: {
+        async begin() {
+          return { attemptId: "attempt-authz", completedActionIndexes: [], fencingToken: 10 };
+        },
+        async revalidateAndRenewLease() {
+          return { ok: true };
+        },
+        async recordActionCompleted() {},
+        async complete() {},
+        async fail() {},
+      },
+      executor: {
+        async revalidate() {
+          return { ok: true };
+        },
+        async apply() {
+          return {
+            ok: false,
+            retryable: false,
+            recovery: "rerun-deploy",
+            failure: {
+              kind: "cloudflare-authorization",
+              retryable: false,
+              resource: "/accounts/account-1/queues",
+              requiredPermission: "Account Queues Edit",
+            },
+          };
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      exitCode: 7,
+      error: {
+        kind: "cloudflare-authorization",
+        resource: "/accounts/account-1/queues",
+        requiredPermission: "Account Queues Edit",
+      },
+    });
+  });
+
   it("rejects stale or insufficient approval before opening an attempt", async () => {
     let began = false;
     const result = await runDeploymentPlan({
@@ -245,6 +298,13 @@ function deploymentPlan(): DeploymentPlan {
     sourceRelease: "fresh",
     targetRelease: "1.0.0",
     targetManifestDigest: "b".repeat(64),
+    sourceStateDigest: "c".repeat(64),
+    targetSchemaVersion: 5,
+    targetArtifactDigests: {
+      management: "d".repeat(64),
+      redirect: "e".repeat(64),
+      migrations: "f".repeat(64),
+    },
     destructive: false,
     actions: [
       { kind: "write-deployment-marker" },

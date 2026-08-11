@@ -1,6 +1,6 @@
 {
   "name": "shortflare",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": false,
   "repository": {
     "type": "git",
@@ -37,5 +37,14 @@
   },
   "engines": {
     "node": ">=22.12.0"
+  },
+  "shortflareRelease": {
+    "supportedSources": [
+      "fresh",
+      "0.0.0"
+    ],
+    "rollbackSafeFrom": [
+      "0.0.0"
+    ]
   }
 }

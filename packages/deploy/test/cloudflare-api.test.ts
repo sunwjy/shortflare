@@ -55,6 +55,33 @@ describe("Cloudflare REST control-plane adapter", () => {
     expect(body).toEqual({ sql: "SELECT ? AS singletonKey", params: ["1"] });
   });
 
+  it("preflights exact DNS, Pages, and Worker route hostname attachments", async () => {
+    const api = createCloudflareApi({
+      apiToken: "secret-token",
+      fetch: async (input) => {
+        const pathname = new URL(String(input)).pathname;
+        const result =
+          pathname === "/client/v4/zones"
+            ? [{ id: "zone-1", name: "example.com" }]
+            : pathname.endsWith("/dns_records")
+              ? [{ name: "go.example.com", type: "CNAME" }]
+              : pathname.endsWith("/workers/routes")
+                ? [{ pattern: "go.example.com/*", script: "foreign-worker" }]
+                : [{ name: "foreign-pages", domains: ["go.example.com"] }];
+        return Response.json({ success: true, errors: [], messages: [], result });
+      },
+    });
+
+    await expect(api.inspectHostnameAttachments?.("account-1", "go.example.com")).resolves.toEqual({
+      ok: true,
+      attachments: [
+        { kind: "dns", owner: "CNAME" },
+        { kind: "route", owner: "foreign-worker" },
+        { kind: "pages", owner: "foreign-pages" },
+      ],
+    });
+  });
+
   it("updates an existing nonempty Queue instead of recreating it", async () => {
     let body: unknown;
     const api = createCloudflareApi({
@@ -248,6 +275,8 @@ describe("Cloudflare REST control-plane adapter", () => {
       kind: "cloudflare-authorization",
       status: 403,
       retryable: false,
+      resource: "/accounts/account-1/d1/database?name=shortflare",
+      requiredPermission: "Account D1 Read",
     });
     expect(JSON.stringify(result)).not.toContain("secret-token");
   });

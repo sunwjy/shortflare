@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createDeploymentPlan, parseReleaseManifest } from "../src/index";
+import { createDeploymentPlan, parseReleaseManifest, releaseOwnershipPolicy } from "../src/index";
 
 describe("Deployment Reconciliation plan", () => {
   it("orders a fresh installation without exposing the setup secret", () => {
@@ -83,7 +83,7 @@ describe("Deployment Reconciliation plan", () => {
       },
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       kind: "resource-collision",
       collisions: ["d1:shortflare"],
@@ -297,7 +297,7 @@ describe("Deployment Reconciliation plan", () => {
       },
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       plan: {
         operation: "noop",
@@ -346,6 +346,34 @@ describe("Deployment Reconciliation plan", () => {
     ]);
     expect(JSON.stringify(result)).not.toContain("create-d1");
     expect(JSON.stringify(result)).not.toContain("write-deployment-marker");
+  });
+
+  it("refuses to replace an Instance Custom Domain during routine deployment", () => {
+    const parsed = parseReleaseManifest(releaseManifest());
+    if (!parsed.ok) throw new Error("test manifest must be valid");
+
+    expect(
+      createDeploymentPlan({
+        target: parsed.value,
+        observed: {
+          kind: "present",
+          accountId: "account-1",
+          instanceId: "instance-1",
+          coherentRelease: "1.0.0",
+          schemaVersion: 5,
+          pendingMigrations: [],
+          analyticsSecret: "present",
+          domains: { redirect: "go.example.com" },
+          drift: [],
+        },
+        requested: { redirectDomain: "other.example.com" },
+      }),
+    ).toEqual({
+      ok: false,
+      kind: "critical-drift",
+      fields: ["domain.redirect"],
+      recovery: "diagnose-and-recover",
+    });
   });
 
   it("repairs a missing first setup handoff after the release became coherent", () => {
@@ -437,6 +465,7 @@ function releaseManifest() {
     },
     supportedSources: ["fresh", "0.9.0"],
     rollbackSafeFrom: ["0.9.0"],
+    ownership: releaseOwnershipPolicy,
     artifacts: {
       management: {
         path: "artifacts/management/index.js",

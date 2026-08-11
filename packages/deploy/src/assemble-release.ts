@@ -2,8 +2,14 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { z } from "zod";
+
 import { hashReleaseArtifact } from "./release-bundle.js";
-import { parseReleaseManifest, type ReleaseManifest } from "./release-manifest.js";
+import {
+  parseReleaseManifest,
+  releaseOwnershipPolicy,
+  type ReleaseManifest,
+} from "./release-manifest.js";
 
 export async function assembleReleaseBundle(
   input: Readonly<{
@@ -12,6 +18,8 @@ export async function assembleReleaseBundle(
     redirectBuild: string;
     migrationsDirectory: string;
     release: string;
+    supportedSources: readonly (string | "fresh")[];
+    rollbackSafeFrom: readonly string[];
   }>,
 ): Promise<ReleaseManifest> {
   const releaseRoot = path.join(input.packageRoot, "release");
@@ -42,8 +50,9 @@ export async function assembleReleaseBundle(
     formatVersion: 1,
     release: input.release,
     schema: { version: schemaVersion, journalSha256, migrations: migrationNames.toSorted() },
-    supportedSources: ["fresh"],
-    rollbackSafeFrom: [],
+    supportedSources: input.supportedSources,
+    rollbackSafeFrom: input.rollbackSafeFrom,
+    ownership: releaseOwnershipPolicy,
     artifacts: {
       management: { path: "release/artifacts/management", sha256: managementSha256 },
       redirect: { path: "release/artifacts/redirect", sha256: redirectSha256 },
@@ -94,16 +103,26 @@ async function assembleWorkspaceRelease(): Promise<void> {
     await readFile(path.join(packageRoot, "package.json"), "utf8"),
   ) as {
     version?: unknown;
+    shortflareRelease?: unknown;
   };
   if (typeof packageJson.version !== "string") throw new Error("Package version is missing");
+  const releasePolicy = releasePolicySchema.safeParse(packageJson.shortflareRelease);
+  if (!releasePolicy.success) throw new Error("Package release compatibility policy is missing");
   await assembleReleaseBundle({
     packageRoot,
     managementBuild: path.join(workspaceRoot, "apps", "management", "dist"),
     redirectBuild: path.join(workspaceRoot, "apps", "redirect-worker", "dist"),
     migrationsDirectory: path.join(workspaceRoot, "packages", "database", "drizzle", "migrations"),
     release: packageJson.version,
+    supportedSources: releasePolicy.data.supportedSources,
+    rollbackSafeFrom: releasePolicy.data.rollbackSafeFrom,
   });
 }
+
+const releasePolicySchema = z.strictObject({
+  supportedSources: z.array(z.union([z.literal("fresh"), z.string().min(1)])).min(1),
+  rollbackSafeFrom: z.array(z.string().min(1)),
+});
 
 if (
   process.argv[1] !== undefined &&

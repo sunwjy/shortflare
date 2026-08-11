@@ -17,32 +17,73 @@ export type DeploymentAttemptJournal = Readonly<{
     attemptId: string,
     fencingToken: number,
   ): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false }>>;
-  recordActionCompleted(attemptId: string, actionIndex: number): Promise<void>;
+  recordActionCompleted(
+    attemptId: string,
+    actionIndex: number,
+    action: DeploymentAction,
+    metadata?: DeploymentActionMetadata,
+  ): Promise<void>;
   complete(attemptId: string): Promise<void>;
   fail(attemptId: string, failure: DeploymentFailure): Promise<void>;
 }>;
 
 export type DeploymentActionExecutor = Readonly<{
+  actionMetadata?(action: DeploymentAction): DeploymentActionMetadata | undefined;
+  checkpointValid?(
+    action: DeploymentAction,
+    plan: DeploymentPlan,
+  ): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false }>>;
   revalidate(
     action: DeploymentAction,
     plan: DeploymentPlan,
-  ): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; field: string }>>;
+  ): Promise<
+    | Readonly<{ ok: true }>
+    | Readonly<{ ok: false; field: string; failure?: DeploymentCloudflareFailure }>
+  >;
   apply(
     action: DeploymentAction,
     plan: DeploymentPlan,
   ): Promise<
     | Readonly<{ ok: true }>
-    | Readonly<{ ok: false; retryable: boolean; recovery: DeploymentRecovery }>
+    | Readonly<{
+        ok: false;
+        retryable: boolean;
+        recovery: DeploymentRecovery;
+        failure?: DeploymentCloudflareFailure;
+      }>
   >;
 }>;
 
-export type DeploymentRecovery = "approve-plan-digest" | "regenerate-plan" | "rerun-deploy";
+export type DeploymentActionMetadata = Readonly<{
+  backup?: Readonly<{ bookmark: string; path: string; sha256: string }>;
+}>;
+
+export type DeploymentRecovery =
+  | "approve-plan-digest"
+  | "regenerate-plan"
+  | "rerun-deploy"
+  | "fix-cloudflare-access";
+
+export type DeploymentCloudflareFailure = Readonly<{
+  kind: "cloudflare-authentication" | "cloudflare-authorization" | "cloudflare-transient";
+  retryable: boolean;
+  resource?: string;
+  requiredPermission?: string;
+}>;
 
 export type DeploymentFailure = Readonly<{
-  kind: "approval-required" | "deployment-drift" | "lease-lost" | "cloudflare-transient";
+  kind:
+    | "approval-required"
+    | "deployment-drift"
+    | "lease-lost"
+    | "cloudflare-transient"
+    | "cloudflare-authentication"
+    | "cloudflare-authorization";
   stage: string;
   retryable: boolean;
   recovery: DeploymentRecovery;
+  resource?: string;
+  requiredPermission?: string;
 }>;
 
 export type RunDeploymentPlanResult =
@@ -59,7 +100,7 @@ export type RunDeploymentPlanResult =
   | Readonly<{
       ok: false;
       formatVersion: 1;
-      exitCode: 3 | 4 | 5;
+      exitCode: 3 | 4 | 5 | 6 | 7;
       attemptId?: string;
       planDigest?: string;
       error: Readonly<{
@@ -67,6 +108,8 @@ export type RunDeploymentPlanResult =
         failedStage: string;
         retryable: boolean;
         recovery: DeploymentRecovery;
+        resource?: string;
+        requiredPermission?: string;
       }>;
     }>;
 
@@ -124,10 +167,6 @@ async function runPendingActions(
 ): Promise<RunDeploymentPlanResult | null> {
   const action = input.plan.actions[actionIndex];
   if (action === undefined) return null;
-  if (completedIndexes.has(actionIndex)) {
-    return runPendingActions(input, attemptId, fencingToken, completedIndexes, actionIndex + 1);
-  }
-
   const lease = await input.journal.revalidateAndRenewLease(attemptId, fencingToken);
   if (!lease.ok) {
     const deploymentFailure: DeploymentFailure = {
@@ -140,31 +179,67 @@ async function runPendingActions(
     return failure(3, deploymentFailure, attemptId, input.plan.digest);
   }
 
+  if (completedIndexes.has(actionIndex)) {
+    const checkpoint = await input.executor.checkpointValid?.(action, input.plan);
+    if (checkpoint?.ok === true) {
+      return runPendingActions(input, attemptId, fencingToken, completedIndexes, actionIndex + 1);
+    }
+  }
+
   const precondition = await input.executor.revalidate(action, input.plan);
   if (!precondition.ok) {
+    const cloudflareFailure = precondition.failure;
     const deploymentFailure: DeploymentFailure = {
-      kind: "deployment-drift",
+      kind: cloudflareFailure?.kind ?? "deployment-drift",
       stage: action.kind,
-      retryable: false,
-      recovery: "regenerate-plan",
+      retryable: cloudflareFailure?.retryable ?? false,
+      recovery: cloudflareFailure === undefined ? "regenerate-plan" : "rerun-deploy",
+      ...(cloudflareFailure?.resource === undefined
+        ? {}
+        : { resource: cloudflareFailure.resource }),
+      ...(cloudflareFailure?.requiredPermission === undefined
+        ? {}
+        : { requiredPermission: cloudflareFailure.requiredPermission }),
     };
     await input.journal.fail(attemptId, deploymentFailure);
-    return failure(3, deploymentFailure, attemptId, input.plan.digest);
+    return failure(
+      exitCodeFor(deploymentFailure.kind),
+      deploymentFailure,
+      attemptId,
+      input.plan.digest,
+    );
   }
 
   const applied = await input.executor.apply(action, input.plan);
   if (!applied.ok) {
+    const cloudflareFailure = applied.failure;
     const deploymentFailure: DeploymentFailure = {
-      kind: "cloudflare-transient",
+      kind: cloudflareFailure?.kind ?? "cloudflare-transient",
       stage: action.kind,
       retryable: applied.retryable,
       recovery: applied.recovery,
+      ...(cloudflareFailure?.resource === undefined
+        ? {}
+        : { resource: cloudflareFailure.resource }),
+      ...(cloudflareFailure?.requiredPermission === undefined
+        ? {}
+        : { requiredPermission: cloudflareFailure.requiredPermission }),
     };
     await input.journal.fail(attemptId, deploymentFailure);
-    return failure(5, deploymentFailure, attemptId, input.plan.digest);
+    return failure(
+      exitCodeFor(deploymentFailure.kind),
+      deploymentFailure,
+      attemptId,
+      input.plan.digest,
+    );
   }
 
-  await input.journal.recordActionCompleted(attemptId, actionIndex);
+  await input.journal.recordActionCompleted(
+    attemptId,
+    actionIndex,
+    action,
+    input.executor.actionMetadata?.(action),
+  );
   return runPendingActions(input, attemptId, fencingToken, completedIndexes, actionIndex + 1);
 }
 
@@ -194,7 +269,7 @@ function success(
 }
 
 function failure(
-  exitCode: 3 | 4 | 5,
+  exitCode: 3 | 4 | 5 | 6 | 7,
   deploymentFailure: DeploymentFailure,
   attemptId?: string,
   planDigest?: string,
@@ -210,6 +285,17 @@ function failure(
       failedStage: deploymentFailure.stage,
       retryable: deploymentFailure.retryable,
       recovery: deploymentFailure.recovery,
+      ...(deploymentFailure.resource === undefined ? {} : { resource: deploymentFailure.resource }),
+      ...(deploymentFailure.requiredPermission === undefined
+        ? {}
+        : { requiredPermission: deploymentFailure.requiredPermission }),
     },
   };
+}
+
+function exitCodeFor(kind: DeploymentFailure["kind"]): 3 | 5 | 6 | 7 {
+  if (kind === "cloudflare-authentication") return 6;
+  if (kind === "cloudflare-authorization") return 7;
+  if (kind === "cloudflare-transient") return 5;
+  return 3;
 }

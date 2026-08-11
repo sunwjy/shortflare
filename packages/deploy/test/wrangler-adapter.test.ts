@@ -73,14 +73,34 @@ describe("pinned Wrangler adapter", () => {
     });
 
     await adapter.putSecret("shortflare-redirect", "ANALYTICS_HMAC_KEY", "secret-value");
+    await adapter.putVersionSecret(
+      "shortflare-redirect",
+      "ANALYTICS_HMAC_KEY",
+      "version-secret-value",
+      "1.0.0-redirect",
+    );
 
     expect(calls).toEqual([
       {
         arguments: ["secret", "put", "ANALYTICS_HMAC_KEY", "--name", "shortflare-redirect"],
         stdin: "secret-value",
       },
+      {
+        arguments: [
+          "versions",
+          "secret",
+          "put",
+          "ANALYTICS_HMAC_KEY",
+          "--name",
+          "shortflare-redirect",
+          "--tag",
+          "1.0.0-redirect-secret",
+        ],
+        stdin: "version-secret-value",
+      },
     ]);
     expect(JSON.stringify(calls[0]?.arguments)).not.toContain("secret-value");
+    expect(JSON.stringify(calls[1]?.arguments)).not.toContain("version-secret-value");
   });
 
   it("imports and validates an upgrade backup in isolated local D1", async () => {
@@ -102,11 +122,13 @@ describe("pinned Wrangler adapter", () => {
       adapter.verifyBackup(
         "/resolved/wrangler.json",
         "/backups/upgrade.sql",
-        "/temporary/local-d1",
+        "/temporary/shortflare-test-backup-validation",
+        { instanceId: "instance-1", sourceRelease: "0.9.0" },
       ),
     ).resolves.toBeUndefined();
     expect(calls[0]).toContain("--file");
-    expect(calls[1]).toContain("migrations");
-    expect(calls[2]).toContain("--json");
+    expect(calls[1]).toContain("--json");
+    expect(calls[2]).toContain("migrations");
+    expect(calls[3]).toContain("--json");
   });
 });

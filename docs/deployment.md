@@ -14,9 +14,12 @@ that bundle before observing or changing Cloudflare resources.
 
 Use a custom API Token restricted to the target account and the Redirect and
 optional Management zones. It needs Account `Workers Scripts: Write`, `D1:
-Edit`, and `Queues: Edit`, plus Zone `Workers Routes: Write` for the selected
-zones. Do not use a Global API Key or a broader account token. Shortflare never
-writes this token to its config, D1, logs, or Deployment Attempts.
+Edit`, `Queues: Edit`, `Pages: Read`, and `Zone: Read`, plus Zone `DNS: Read` and
+`Workers Routes: Write` for the selected zones. The read permissions let
+preflight refuse an existing DNS origin, Pages domain, or Worker Route without
+taking it over. Do not use a Global API Key or a broader account token.
+Shortflare never writes this token to its config, D1, logs, or Deployment
+Attempts.
 
 > [!NOTE]
 > Wrangler stores interactive OAuth credentials behind its own encrypted
@@ -85,6 +88,10 @@ They are never deleted automatically.
 ## Diagnose and recover
 
 Diagnosis is read-only:
+
+Use a separate read-only token with Account `Workers Scripts: Read`, `D1: Read`,
+`Queues: Read`, `Pages: Read`, and `Zone: Read`, plus Zone `DNS: Read` and
+`Workers Routes: Read`. Diagnose does not require any write permission.
 
 ```sh
 npx shortflare@latest diagnose --account-id account-id

@@ -50,6 +50,27 @@
       "when": 1786278190315,
       "tag": "0006_wandering_hydra",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786279972162,
+      "tag": "0007_colossal_spitfire",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786281273600,
+      "tag": "0008_uneven_war_machine",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786453155750,
+      "tag": "0009_famous_leo",
+      "breakpoints": true
     }
   ]
 }

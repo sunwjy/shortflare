@@ -10,6 +10,8 @@ export type CloudflareApiFailure = Readonly<{
     | "cloudflare-invalid-response";
   status: number;
   retryable: boolean;
+  resource?: string;
+  requiredPermission?: string;
 }>;
 
 export type D1Database = Readonly<{ id: string; name: string }>;
@@ -28,6 +30,10 @@ export type CloudflareQueue = Readonly<{
     type: string;
     deadLetterQueue: string;
     maxRetries?: number;
+    maxBatchSize?: number;
+    maxBatchTimeout?: number;
+    maxConcurrency?: number;
+    retryDelay?: number;
   }>[];
 }>;
 export type WorkerDomain = Readonly<{ id: string; hostname: string; worker: string }>;
@@ -38,8 +44,18 @@ export type WorkerBinding = Readonly<{
   databaseId?: string;
   queueName?: string;
 }>;
+export type HostnameAttachment = Readonly<{
+  kind: "dns" | "pages" | "route";
+  owner: string;
+}>;
 
 export type CloudflareApi = Readonly<{
+  inspectHostnameAttachments?(
+    accountId: string,
+    hostname: string,
+  ): Promise<
+    CloudflareApiFailure | Readonly<{ ok: true; attachments: readonly HostnameAttachment[] }>
+  >;
   listD1Databases(
     accountId: string,
     name: string,
@@ -52,7 +68,7 @@ export type CloudflareApi = Readonly<{
     accountId: string,
     databaseId: string,
     sql: string,
-    parameters?: readonly string[],
+    parameters?: readonly (string | null)[],
   ): Promise<CloudflareApiFailure | Readonly<{ ok: true; rows: readonly unknown[] }>>;
   beginD1Export(
     accountId: string,
@@ -140,7 +156,17 @@ const queueSchema = z.looseObject({
         script_name: z.string().min(1),
         type: z.string().min(1),
         dead_letter_queue: z.string(),
-        settings: z.looseObject({ max_retries: z.number().optional() }).optional(),
+        settings: z
+          .looseObject({
+            max_retries: z.number().optional(),
+            batch_size: z.number().optional(),
+            max_batch_size: z.number().optional(),
+            max_wait_time_ms: z.number().optional(),
+            max_batch_timeout: z.number().optional(),
+            max_concurrency: z.number().optional(),
+            retry_delay: z.number().optional(),
+          })
+          .optional(),
       }),
     )
     .optional(),
@@ -174,6 +200,16 @@ const workerDeploymentsSchema = z.looseObject({
     }),
   ),
 });
+const zoneSchema = z.looseObject({ id: z.string().min(1), name: z.string().min(1) });
+const dnsRecordSchema = z.looseObject({ name: z.string().min(1), type: z.string().min(1) });
+const workerRouteSchema = z.looseObject({
+  pattern: z.string().min(1),
+  script: z.string().nullable().optional(),
+});
+const pagesProjectSchema = z.looseObject({
+  name: z.string().min(1),
+  domains: z.array(z.string()).optional(),
+});
 
 export function createCloudflareApi(
   input: Readonly<{
@@ -206,7 +242,7 @@ export function createCloudflareApi(
     }
 
     const payload: unknown = await response.json().catch(() => undefined);
-    if (!response.ok) return failureForStatus(response.status);
+    if (!response.ok) return failureForStatus(response.status, resourcePath, method);
     const envelope = z
       .looseObject({ success: z.literal(true), result: resultSchema })
       .safeParse(payload);
@@ -222,6 +258,57 @@ export function createCloudflareApi(
   }
 
   return {
+    async inspectHostnameAttachments(accountId, hostname) {
+      const zones = await request(
+        "GET",
+        `/zones?account.id=${encodeURIComponent(accountId)}&per_page=50`,
+        z.array(zoneSchema),
+      );
+      if (!zones.ok) return zones;
+      const zone = zones.result
+        .filter(
+          (candidate) => hostname === candidate.name || hostname.endsWith(`.${candidate.name}`),
+        )
+        .toSorted((left, right) => right.name.length - left.name.length)[0];
+      if (zone === undefined) {
+        return { ok: true, attachments: [] };
+      }
+      const [records, routes, projects] = await Promise.all([
+        request(
+          "GET",
+          `/zones/${encodeURIComponent(zone.id)}/dns_records?name.exact=${encodeURIComponent(hostname)}&per_page=100`,
+          z.array(dnsRecordSchema),
+        ),
+        request(
+          "GET",
+          `/zones/${encodeURIComponent(zone.id)}/workers/routes`,
+          z.array(workerRouteSchema),
+        ),
+        request(
+          "GET",
+          `/accounts/${encodeURIComponent(accountId)}/pages/projects?per_page=100`,
+          z.array(pagesProjectSchema),
+        ),
+      ]);
+      if (!records.ok) return records;
+      if (!routes.ok) return routes;
+      if (!projects.ok) return projects;
+      return {
+        ok: true,
+        attachments: [
+          ...records.result.map((record) => ({
+            kind: "dns" as const,
+            owner: record.type,
+          })),
+          ...routes.result
+            .filter((route) => routePatternCoversHostname(route.pattern, hostname))
+            .map((route) => ({ kind: "route" as const, owner: route.script ?? "route" })),
+          ...projects.result
+            .filter((project) => project.domains?.includes(hostname) === true)
+            .map((project) => ({ kind: "pages" as const, owner: project.name })),
+        ],
+      };
+    },
     async listD1Databases(accountId, name) {
       const response = await request(
         "GET",
@@ -474,16 +561,57 @@ function toQueue(queue: z.infer<typeof queueSchema>): CloudflareQueue {
       ...(consumer.settings?.max_retries === undefined
         ? {}
         : { maxRetries: consumer.settings.max_retries }),
+      ...(consumer.settings?.max_batch_size === undefined &&
+      consumer.settings?.batch_size === undefined
+        ? {}
+        : {
+            maxBatchSize: consumer.settings.max_batch_size ?? consumer.settings.batch_size ?? 0,
+          }),
+      ...(consumer.settings?.max_batch_timeout === undefined &&
+      consumer.settings?.max_wait_time_ms === undefined
+        ? {}
+        : {
+            maxBatchTimeout:
+              consumer.settings.max_batch_timeout ??
+              (consumer.settings.max_wait_time_ms ?? 0) / 1_000,
+          }),
+      ...(consumer.settings?.max_concurrency === undefined
+        ? {}
+        : { maxConcurrency: consumer.settings.max_concurrency }),
+      ...(consumer.settings?.retry_delay === undefined
+        ? {}
+        : { retryDelay: consumer.settings.retry_delay }),
     })),
   };
 }
 
-function failureForStatus(status: number): CloudflareApiFailure {
+function routePatternCoversHostname(pattern: string, hostname: string): boolean {
+  const hostPattern = pattern
+    .replace(/^https?:\/\//u, "")
+    .split("/")[0]
+    ?.split(":")[0];
+  if (hostPattern === undefined) return false;
+  if (hostPattern === hostname) return true;
+  return hostPattern.startsWith("*.") && hostname.endsWith(hostPattern.slice(1));
+}
+
+function failureForStatus(
+  status: number,
+  resource: string,
+  method: "DELETE" | "GET" | "POST" | "PUT",
+): CloudflareApiFailure {
   if (status === 401) {
     return { ok: false, kind: "cloudflare-authentication", status, retryable: false };
   }
   if (status === 403) {
-    return { ok: false, kind: "cloudflare-authorization", status, retryable: false };
+    return {
+      ok: false,
+      kind: "cloudflare-authorization",
+      status,
+      retryable: false,
+      resource,
+      requiredPermission: requiredPermission(resource, method),
+    };
   }
   if (status === 409) {
     return { ok: false, kind: "cloudflare-conflict", status, retryable: false };
@@ -494,4 +622,15 @@ function failureForStatus(status: number): CloudflareApiFailure {
     status,
     retryable: status >= 500 || status === 429,
   };
+}
+
+function requiredPermission(resource: string, method: "DELETE" | "GET" | "POST" | "PUT") {
+  const access = method === "GET" ? "Read" : "Edit";
+  if (resource.includes("/dns_records")) return `Zone DNS ${access}`;
+  if (resource.includes("/workers/routes")) return `Zone Workers Routes ${access}`;
+  if (resource.includes("/pages/projects")) return `Account Pages ${access}`;
+  if (resource.startsWith("/zones")) return "Account Zone Read";
+  if (resource.includes("/d1/")) return `Account D1 ${access}`;
+  if (resource.includes("/queues")) return `Account Queues ${access}`;
+  return `Account Workers Scripts ${access}`;
 }

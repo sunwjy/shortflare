@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded_by: 0045
 ---
 
 # Support interactive OAuth and non-interactive API tokens

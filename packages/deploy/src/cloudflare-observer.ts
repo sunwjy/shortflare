@@ -17,6 +17,7 @@ const coherentSchema = z.looseObject({
   redirectWorkerVersion: z.string().min(1),
   managementArtifactSha256: z.string().length(64).optional(),
   redirectArtifactSha256: z.string().length(64).optional(),
+  migrationJournalSha256: z.string().length(64).optional(),
 });
 const migrationSchema = z.looseObject({ name: z.string().min(1) });
 const setupStateSchema = z.looseObject({
@@ -40,6 +41,7 @@ export async function observeCloudflareDeployment(
     targetRelease?: string;
     managementArtifactSha256?: string;
     redirectArtifactSha256?: string;
+    migrationJournalSha256?: string;
   }>,
 ): Promise<ObservedDeploymentState> {
   const [databases, subdomain, queues, scripts, domains] = await Promise.all([
@@ -54,6 +56,33 @@ export async function observeCloudflareDeployment(
   if (!queues.ok) throw new CloudflareObservationError(queues);
   if (!scripts.ok) throw new CloudflareObservationError(scripts);
   if (!domains.ok) throw new CloudflareObservationError(domains);
+  const requestedDomains = [
+    ...(input.redirectDomain === undefined
+      ? []
+      : [{ hostname: input.redirectDomain, worker: "shortflare-redirect" }]),
+    ...(input.managementDomain === undefined
+      ? []
+      : [{ hostname: input.managementDomain, worker: "shortflare-management" }]),
+  ];
+  const hostnameAttachments = (
+    await Promise.all(
+      requestedDomains.map(async ({ hostname, worker }) => {
+        if (
+          domains.domains.some(
+            (domain) => domain.hostname === hostname && domain.worker === worker,
+          ) ||
+          input.api.inspectHostnameAttachments === undefined
+        ) {
+          return [];
+        }
+        const inspected = await input.api.inspectHostnameAttachments(input.accountId, hostname);
+        if (!inspected.ok) throw new CloudflareObservationError(inspected);
+        return inspected.attachments.map(
+          (attachment) => `hostname:${hostname}:${attachment.kind}:${attachment.owner}`,
+        );
+      }),
+    )
+  ).flat();
 
   const exactDatabases = databases.databases.filter((database) => database.name === "shortflare");
   if (exactDatabases.length === 0) {
@@ -74,14 +103,20 @@ export async function observeCloudflareDeployment(
     const domainCollisions = domains.domains
       .filter(
         (domain) =>
-          domain.hostname === input.redirectDomain || domain.hostname === input.managementDomain,
+          domain.worker === "shortflare-management" || domain.worker === "shortflare-redirect",
       )
       .map((domain) => `domain:${domain.hostname}`);
     return {
       kind: "absent",
       accountId: input.accountId,
       workersDevRegistered: subdomain.registered,
-      collisions: [...consumerCollisions, ...collisions, ...workerCollisions, ...domainCollisions],
+      collisions: [
+        ...consumerCollisions,
+        ...collisions,
+        ...workerCollisions,
+        ...domainCollisions,
+        ...hostnameAttachments,
+      ],
     };
   }
   if (exactDatabases.length !== 1) {
@@ -140,7 +175,8 @@ export async function observeCloudflareDeployment(
       input.accountId,
       database.id,
       `SELECT management_artifact_sha256 AS managementArtifactSha256,
-              redirect_artifact_sha256 AS redirectArtifactSha256
+              redirect_artifact_sha256 AS redirectArtifactSha256,
+              migration_journal_sha256 AS migrationJournalSha256
        FROM coherent_release WHERE singleton_key = 1`,
     ),
     queryMissingTableAsEmpty(
@@ -195,6 +231,7 @@ export async function observeCloudflareDeployment(
   );
   const drift = [
     ...queueDrift(queues.queues),
+    ...migrationJournalDrift(input.targetMigrations, migrationRows),
     ...workerDrift(scripts.scripts.map((script) => script.name)),
     ...workerBindingDrift(database.id, managementBindings.bindings, redirectBindings.bindings),
     ...activeVersionDrift(
@@ -203,6 +240,7 @@ export async function observeCloudflareDeployment(
       redirectVersions.versionIds,
     ),
     ...domainDrift(input, domains.domains),
+    ...hostnameAttachments.map((field) => ({ kind: "critical" as const, field })),
     ...releaseIdentityDrift(input, coherent.success ? coherent.data : undefined),
   ];
   const interruptedAttempts = attemptRows.flatMap((row) => {
@@ -216,12 +254,30 @@ export async function observeCloudflareDeployment(
       },
     ];
   });
+  const redirectDomain = domains.domains.find(
+    (domain) => domain.worker === "shortflare-redirect",
+  )?.hostname;
+  const managementDomain = domains.domains.find(
+    (domain) => domain.worker === "shortflare-management",
+  )?.hostname;
   return {
     kind: "present",
     accountId: input.accountId,
     databaseId: database.id,
     instanceId: marker.data.instanceId,
     coherentRelease: coherent.success ? coherent.data.release : "fresh",
+    domains: {
+      ...(redirectDomain === undefined ? {} : { redirect: redirectDomain }),
+      ...(managementDomain === undefined ? {} : { management: managementDomain }),
+    },
+    ...(coherent.success
+      ? {
+          coherentWorkerVersions: {
+            management: coherent.data.managementWorkerVersion,
+            redirect: coherent.data.redirectWorkerVersion,
+          },
+        }
+      : {}),
     schemaVersion: coherent.success ? coherent.data.schemaVersion : 0,
     pendingMigrations: input.targetMigrations.filter((name) => !appliedMigrations.has(name)),
     analyticsSecret: secrets.names.includes("ANALYTICS_HMAC_KEY") ? "present" : "missing",
@@ -242,6 +298,7 @@ function releaseIdentityDrift(
     targetRelease?: string;
     managementArtifactSha256?: string;
     redirectArtifactSha256?: string;
+    migrationJournalSha256?: string;
   }>,
   coherent: z.infer<typeof coherentSchema> | undefined,
 ): readonly ObservedDeploymentDrift[] {
@@ -255,6 +312,10 @@ function releaseIdentityDrift(
     coherent.redirectArtifactSha256 === input.redirectArtifactSha256
       ? []
       : [{ kind: "critical" as const, field: "redirect.artifactSha256" }]),
+    ...(input.migrationJournalSha256 === undefined ||
+    coherent.migrationJournalSha256 === input.migrationJournalSha256
+      ? []
+      : [{ kind: "critical" as const, field: "schema.migrationJournalSha256" }]),
   ];
 }
 
@@ -297,27 +358,54 @@ function queueDrift(queues: readonly CloudflareQueue[]): readonly ObservedDeploy
       queue.settings.messageRetentionPeriod === 86_400
         ? []
         : [{ kind: "shortflare-invariant" as const, field: `queue.${name}.retention` }];
-    if (name === "shortflare-events-dlq") return retention;
+    if (name === "shortflare-events-dlq") {
+      return [
+        ...retention,
+        ...(queue.consumers.length === 0
+          ? []
+          : [{ kind: "critical" as const, field: "queue.deadLetter.consumers" }]),
+      ];
+    }
     const producer = queue.producers.some(
       (candidate) => candidate.type === "worker" && candidate.script === "shortflare-redirect",
     );
-    const consumer = queue.consumers.some(
+    const matchingConsumers = queue.consumers.filter(
       (candidate) =>
         candidate.type === "worker" &&
         candidate.scriptName === "shortflare-management" &&
         candidate.deadLetterQueue === "shortflare-events-dlq" &&
-        candidate.maxRetries === 3,
+        candidate.maxRetries === 3 &&
+        candidate.maxBatchSize === 10 &&
+        candidate.maxBatchTimeout === 1 &&
+        candidate.maxConcurrency === 1 &&
+        candidate.retryDelay === 60,
     );
     return [
       ...retention,
       ...(producer
         ? []
         : [{ kind: "shortflare-invariant" as const, field: "queue.primary.producer" }]),
-      ...(consumer
+      ...(matchingConsumers.length === 1 && queue.consumers.length === 1
         ? []
-        : [{ kind: "shortflare-invariant" as const, field: "queue.primary.consumer" }]),
+        : [
+            {
+              kind: "critical" as const,
+              field: "queue.primary.consumer",
+            },
+          ]),
     ];
   });
+}
+
+function migrationJournalDrift(
+  expected: readonly string[],
+  rows: readonly unknown[],
+): readonly ObservedDeploymentDrift[] {
+  const actual = rows.map((row) => migrationSchema.safeParse(row));
+  const orderedPrefix = actual.every(
+    (parsed, index) => parsed.success && parsed.data.name === expected[index],
+  );
+  return orderedPrefix ? [] : [{ kind: "critical", field: "schema.appliedMigrationJournal" }];
 }
 
 function workerBindingDrift(
@@ -393,7 +481,11 @@ function domainDrift(
 
 export class CloudflareObservationError extends Error {
   public constructor(public readonly failure: CloudflareApiFailure) {
-    super(`Cloudflare observation failed with ${failure.kind}`);
+    super(
+      failure.kind === "cloudflare-authorization"
+        ? `Cloudflare authorization failed for ${failure.resource ?? "unknown resource"}; required permission: ${failure.requiredPermission ?? "unknown"}`
+        : `Cloudflare observation failed with ${failure.kind}`,
+    );
     this.name = "CloudflareObservationError";
   }
 }

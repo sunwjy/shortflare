@@ -58,7 +58,11 @@ export type { InstanceConfig, ParseInstanceConfigResult } from "./local-instance
 export { hashReleaseArtifact, verifyReleaseBundle } from "./release-bundle.js";
 export type { VerifyReleaseBundleResult } from "./release-bundle.js";
 export { prepareWorkerArtifacts } from "./resolved-worker-artifacts.js";
-export { hashReleaseManifest, parseReleaseManifest } from "./release-manifest.js";
+export {
+  hashReleaseManifest,
+  parseReleaseManifest,
+  releaseOwnershipPolicy,
+} from "./release-manifest.js";
 export type {
   ParseReleaseManifestResult,
   ReleaseManifest,
