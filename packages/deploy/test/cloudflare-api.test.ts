@@ -3,6 +3,34 @@ import { describe, expect, it } from "vitest";
 import { createCloudflareApi } from "../src/cloudflare-api";
 
 describe("Cloudflare REST control-plane adapter", () => {
+  it("accepts Queue responses that omit the default delivery-paused setting", async () => {
+    const api = createCloudflareApi({
+      apiToken: "secret-token",
+      fetch: async () =>
+        Response.json({
+          success: true,
+          errors: [],
+          messages: [],
+          result: {
+            queue_id: "queue-1",
+            queue_name: "shortflare-events",
+            settings: { delivery_delay: 0, message_retention_period: 86_400 },
+          },
+        }),
+    });
+
+    await expect(api.createQueue("account-1", "shortflare-events", 86_400)).resolves.toEqual({
+      ok: true,
+      queue: {
+        id: "queue-1",
+        name: "shortflare-events",
+        settings: { deliveryDelay: 0, deliveryPaused: false, messageRetentionPeriod: 86_400 },
+        producers: [],
+        consumers: [],
+      },
+    });
+  });
+
   it("discovers D1 by exact name and validates the API envelope", async () => {
     const requests: Array<{ url: string; authorization: string | null }> = [];
     const api = createCloudflareApi({

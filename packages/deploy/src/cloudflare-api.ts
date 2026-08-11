@@ -143,7 +143,7 @@ const queueSchema = z.looseObject({
   queue_name: z.string().min(1),
   settings: z.looseObject({
     delivery_delay: z.number(),
-    delivery_paused: z.boolean(),
+    delivery_paused: z.boolean().default(false),
     message_retention_period: z.number(),
   }),
   producers: z
