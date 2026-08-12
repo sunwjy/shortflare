@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 dist/
 packages/deploy/release/
+packages/deploy/LICENSE
 coverage/
 .turbo/
 .wrangler/

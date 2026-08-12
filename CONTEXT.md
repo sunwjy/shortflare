@@ -28,6 +28,10 @@ _Avoid_: Existing Instance, adoptable resource
 A versioned set of schema migrations, Management Worker, and Redirect Worker artifacts designed to operate together.
 _Avoid_: App version, Worker version
 
+**Public Package Surface**:
+The reviewed metadata, legal notices, documentation, release notes, CLI, and release artifacts delivered together in the `shortflare` npm tarball.
+_Avoid_: Build output, package files
+
 **Coherent Release**:
 The latest Shortflare Release whose schema, Management Worker, and Redirect Worker have been verified together for an Instance.
 _Avoid_: Current version, partial release

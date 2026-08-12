@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  build: { license: { fileName: ".vite/license.json" } },
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },

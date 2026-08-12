@@ -18,6 +18,25 @@ export type CliApplication = Readonly<{
   recover(command: RecoverCommand): Promise<CliApplicationResult>;
 }>;
 
+export function renderCliHelp(release: string): string {
+  return `Shortflare deployment CLI
+
+Usage:
+  shortflare deploy [options]
+  shortflare diagnose [options]
+  shortflare recover <action> [options]
+
+Commands:
+  deploy      Install, upgrade, or resume an Instance
+  diagnose    Inspect an Instance without mutation
+  recover     Apply an explicitly named recovery action
+
+Documentation:
+  Package README: npm view shortflare readme
+  Deployment guide: https://github.com/sunwjy/shortflare/blob/v${release}/docs/deployment.md
+`;
+}
+
 export async function runCli(
   arguments_: readonly string[],
   application: CliApplication,

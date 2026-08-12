@@ -1,31 +1,20 @@
 #!/usr/bin/env node
 
 import { createInterface } from "node:readline/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runCli } from "./cli.js";
+import { renderCliHelp, runCli } from "./cli.js";
 import type { DeploymentPlan } from "./deployment-plan.js";
 import { createProductionApplication } from "./production-application.js";
 
 const rawArguments = process.argv.slice(2);
 const jsonMode = rawArguments.includes("--json");
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 if (rawArguments.includes("--help") || rawArguments.includes("-h")) {
-  process.stdout.write(`Shortflare deployment CLI
-
-Usage:
-  shortflare deploy [options]
-  shortflare diagnose [options]
-  shortflare recover <action> [options]
-
-Commands:
-  deploy      Install, upgrade, or resume an Instance
-  diagnose    Inspect an Instance without mutation
-  recover     Apply an explicitly named recovery action
-
-Run the deployment guide at docs/deployment.md for complete options.
-`);
+  process.stdout.write(renderCliHelp(await readPackageVersion()));
 } else {
   await runMain();
 }
@@ -43,7 +32,6 @@ async function runMain(): Promise<void> {
         "CLOUDFLARE_API_TOKEN is required. Create a scoped token for D1, Workers, Queues, and domains.",
       );
     }
-    const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     const application = await createProductionApplication({
       packageRoot,
       apiToken,
@@ -73,6 +61,16 @@ async function runMain(): Promise<void> {
     }
     process.exitCode = 1;
   }
+}
+
+async function readPackageVersion(): Promise<string> {
+  const packageJson = JSON.parse(
+    await readFile(path.join(packageRoot, "package.json"), "utf8"),
+  ) as {
+    version?: unknown;
+  };
+  if (typeof packageJson.version !== "string") throw new Error("Package version is missing");
+  return packageJson.version;
 }
 
 async function completeArguments(
