@@ -1,5 +1,8 @@
 # shortflare
 
+> The `0.1.0` package is in pre-release hardening and has not been published to
+> npm. The command below will become available with the first public release.
+
 Idempotently install or upgrade a Shortflare Instance in a Cloudflare account:
 
 ```sh

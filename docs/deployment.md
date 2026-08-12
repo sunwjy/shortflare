@@ -1,8 +1,13 @@
 # Deployment CLI
 
-The published `shortflare` package contains the CLI, immutable Worker builds,
-forward-only D1 migrations, and a SHA-256 release manifest. The command verifies
-that bundle before observing or changing Cloudflare resources.
+> [!IMPORTANT]
+> The `shortflare` npm package has not been published. This guide documents the
+> implemented CLI and the workflow that will become available with the first
+> public `0.1.0` release.
+
+The release package contains the CLI, immutable Worker builds, forward-only D1
+migrations, and a SHA-256 release manifest. The command verifies that bundle
+before observing or changing Cloudflare resources.
 
 ## Requirements
 
@@ -30,8 +35,8 @@ Attempts.
 
 ## Install
 
-Run the command and answer the domain, Administrator email, and exact-plan
-approval prompts:
+After publication, run the command and answer the domain, Administrator email,
+and exact-plan approval prompts:
 
 ```sh
 export CLOUDFLARE_API_TOKEN='...'
