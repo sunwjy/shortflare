@@ -4,7 +4,7 @@ status: accepted
 
 # Support macOS, Linux, and Windows on Node 22
 
-The public CLI supports macOS, Linux, and Windows on Node.js `>=22.12.0`. Its
+The public CLI supports macOS, Linux, and Windows on Node.js `>=22.13.0`. Its
 reconciliation core uses Node APIs and argument-array subprocess execution
 rather than shell scripts or Unix-only commands. Platform adapters own standard
 config and data locations, temporary files, atomic replacement, and the closest

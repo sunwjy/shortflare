@@ -44,7 +44,7 @@ export async function runCli(
   runtime: Readonly<{ nodeVersion: string }> = { nodeVersion: process.versions.node },
 ): Promise<number> {
   if (!supportsNode(runtime.nodeVersion)) {
-    output.stderr("Node.js >=22.12.0 is required to run Shortflare.\n");
+    output.stderr("Node.js >=22.13.0 is required to run Shortflare.\n");
     return 2;
   }
 
@@ -92,7 +92,7 @@ export async function runCli(
 
 function supportsNode(version: string): boolean {
   const [major = 0, minor = 0] = version.split(".").map((part) => Number.parseInt(part, 10));
-  return major > 22 || (major === 22 && minor >= 12);
+  return major > 22 || (major === 22 && minor >= 13);
 }
 
 function renderHumanResult(

@@ -31,7 +31,7 @@ const publicPackageSchema = z
     homepage: z.literal(expectedHomepage),
     bugs: z.object({ url: z.literal(expectedBugsUrl) }),
     keywords: z.array(z.string()),
-    engines: z.object({ node: z.literal(">=22.12.0") }),
+    engines: z.object({ node: z.literal(">=22.13.0") }),
     exports: z.literal("./dist/index.js"),
     bin: z.object({ shortflare: z.literal("./dist/bin.js") }),
     publishConfig: z.object({ access: z.literal("public"), provenance: z.literal(true) }),
