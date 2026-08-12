@@ -20,7 +20,7 @@ catalog:
   "@vitejs/plugin-react": 6.0.3
   drizzle-kit: 0.31.10
   drizzle-orm: 0.45.2
-  hono: 4.12.31
+  hono: 4.13.1
   oxfmt: 0.59.0
   oxlint: 1.74.0
   react: 19.2.7
@@ -29,9 +29,8 @@ catalog:
   typescript: 6.0.3
   vite: 8.1.5
   vitest: 4.1.10
-  wrangler: 4.112.0
+  wrangler: 4.120.1
   zod: 4.4.3
 
 minimumReleaseAgeExclude:
   - "@cloudflare/workers-types@5.20260719.1"
-  - hono@4.12.31

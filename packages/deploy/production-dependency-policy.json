@@ -1,0 +1,20 @@
+{
+  "dependencies": [
+    {
+      "path": ["shortflare", "wrangler"],
+      "version": "4.120.1"
+    },
+    {
+      "path": ["shortflare", "wrangler", "miniflare"],
+      "version": "5.20260804.0-alpha"
+    },
+    {
+      "path": ["shortflare", "wrangler", "miniflare", "sharp"],
+      "version": "0.35.2"
+    },
+    {
+      "path": ["shortflare", "wrangler", "miniflare", "undici"],
+      "version": "7.29.0"
+    }
+  ]
+}
