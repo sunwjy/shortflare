@@ -1,15 +1,13 @@
-import { execFile as nodeExecFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { promisify } from "node:util";
 import path from "node:path";
 
 import { z } from "zod";
 
 import { renderCliHelp } from "./cli.js";
+import { runNpm } from "./npm-cli.js";
+import { verifyReleaseBundle } from "./release-bundle.js";
 import { parseReleaseManifest } from "./release-manifest.js";
-
-const execFile = promisify(nodeExecFile);
 
 const expectedDescription =
   "An open-source URL shortener designed to run in your own Cloudflare account.";
@@ -63,6 +61,10 @@ export async function verifyPackedPackage(
   if (!manifestResult.ok) throw new Error("The generated release manifest is invalid");
   if (manifestResult.value.release !== packageJson.version) {
     throw new Error("The package and release manifest versions do not match");
+  }
+  const bundleIntegrity = await verifyReleaseBundle(input.packageRoot, manifestResult.value);
+  if (!bundleIntegrity.ok) {
+    throw new Error(`The ${bundleIntegrity.artifact} release artifact does not match its digest`);
   }
 
   const [repositoryLicense, packageLicense, readme, changelog, notices, allowlist] =
@@ -129,9 +131,8 @@ async function readAllowedPaths(filePath: string): Promise<string[]> {
 async function runNpmPack(packageRoot: string): Promise<unknown> {
   const cacheDirectory = await mkdtemp(path.join(tmpdir(), "shortflare-npm-cache-"));
   try {
-    const { stdout } = await execFile("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    const { stdout } = await runNpm(["pack", "--dry-run", "--json", "--ignore-scripts"], {
       cwd: packageRoot,
-      encoding: "utf8",
       env: { ...process.env, NPM_CONFIG_CACHE: cacheDirectory },
       maxBuffer: 10 * 1024 * 1024,
     });
