@@ -27,6 +27,14 @@ describe("release assembly", () => {
       writeFile(path.join(migrationsDirectory, "0000_initial.sql"), "SELECT 1;"),
       writeFile(path.join(migrationsDirectory, "notes.md"), "not packaged"),
     ]);
+    await Promise.all([
+      mkdir(path.join(managementBuild, ".vite"), { recursive: true }),
+      mkdir(path.join(redirectBuild, ".vite"), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(managementBuild, ".vite", "license.json"), "[]"),
+      writeFile(path.join(redirectBuild, ".vite", "license.json"), "[]"),
+    ]);
 
     const manifest = await assembleReleaseBundle({
       packageRoot,
@@ -41,6 +49,11 @@ describe("release assembly", () => {
     await expect(verifyReleaseBundle(packageRoot, manifest)).resolves.toEqual({ ok: true });
     await expect(
       readFile(path.join(packageRoot, "release", "migrations", "notes.md")),
+    ).rejects.toThrow();
+    await expect(
+      readFile(
+        path.join(packageRoot, "release", "artifacts", "management", ".vite", "license.json"),
+      ),
     ).rejects.toThrow();
     expect(
       JSON.parse(await readFile(path.join(packageRoot, "release", "manifest.json"), "utf8")),

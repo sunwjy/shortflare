@@ -2,6 +2,18 @@
   "name": "shortflare",
   "version": "0.1.0",
   "private": false,
+  "description": "An open-source URL shortener designed to run in your own Cloudflare account.",
+  "keywords": [
+    "cloudflare",
+    "cloudflare-workers",
+    "self-hosted",
+    "url-shortener"
+  ],
+  "homepage": "https://github.com/sunwjy/shortflare#readme",
+  "bugs": {
+    "url": "https://github.com/sunwjy/shortflare/issues"
+  },
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sunwjy/shortflare.git"
@@ -10,7 +22,29 @@
     "shortflare": "./dist/bin.js"
   },
   "files": [
-    "dist",
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md",
+    "dist/bin.*",
+    "dist/cli-contract.*",
+    "dist/cli.*",
+    "dist/cloudflare-api.*",
+    "dist/cloudflare-deployment-executor.*",
+    "dist/cloudflare-observer.*",
+    "dist/d1-backup.*",
+    "dist/d1-deployment-journal.*",
+    "dist/deployment-application.*",
+    "dist/deployment-plan.*",
+    "dist/deployment-runner.*",
+    "dist/index.*",
+    "dist/local-instance-config.*",
+    "dist/node-wrangler-runner.*",
+    "dist/production-application.*",
+    "dist/production-recovery.*",
+    "dist/recovery-plan.*",
+    "dist/release-bundle.*",
+    "dist/release-manifest.*",
+    "dist/resolved-worker-artifacts.*",
+    "dist/wrangler-adapter.*",
     "release"
   ],
   "type": "module",
@@ -21,10 +55,12 @@
     "provenance": true
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node dist/assemble-release.js",
+    "build": "tsc -p tsconfig.build.json && node dist/assemble-release.js && node dist/verify-package.js",
+    "notices:update": "tsc -p tsconfig.build.json && node dist/generate-third-party-notices.js --write",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:pack": "node dist/verify-package.js"
   },
   "dependencies": {
     "wrangler": "catalog:",

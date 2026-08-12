@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { runCli } from "../src/cli";
+import { renderCliHelp, runCli } from "../src/cli";
 
 describe("shortflare command entrypoint", () => {
+  it("links help to documentation for the exact release", () => {
+    expect(renderCliHelp("0.1.0")).toContain(
+      "https://github.com/sunwjy/shortflare/blob/v0.1.0/docs/deployment.md",
+    );
+    expect(renderCliHelp("0.1.0")).not.toContain("docs/deployment.md for complete options");
+  });
+
   it("writes exactly one versioned JSON result to stdout", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];

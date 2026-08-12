@@ -10,6 +10,7 @@ import {
   releaseOwnershipPolicy,
   type ReleaseManifest,
 } from "./release-manifest.js";
+import { prepareWorkspacePackageSurface } from "./workspace-package-surface.js";
 
 export async function assembleReleaseBundle(
   input: Readonly<{
@@ -33,6 +34,10 @@ export async function assembleReleaseBundle(
     copyDirectory(input.managementBuild, managementDestination),
     copyDirectory(input.redirectBuild, redirectDestination),
     copyMigrations(input.migrationsDirectory, migrationsDestination),
+  ]);
+  await Promise.all([
+    removeViteLicenseMetadata(managementDestination),
+    removeViteLicenseMetadata(redirectDestination),
   ]);
 
   const [managementSha256, redirectSha256, journalSha256] = await Promise.all([
@@ -96,6 +101,26 @@ async function copyMigrations(source: string, destination: string): Promise<void
   );
 }
 
+async function removeViteLicenseMetadata(root: string): Promise<void> {
+  await Promise.all((await findViteLicenseMetadata(root)).map((filePath) => rm(filePath)));
+}
+
+async function findViteLicenseMetadata(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nestedFiles = await Promise.all(
+    entries.map((entry) => {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return findViteLicenseMetadata(entryPath);
+      return Promise.resolve(
+        entry.isFile() && entry.name === "license.json" && path.basename(directory) === ".vite"
+          ? [entryPath]
+          : [],
+      );
+    }),
+  );
+  return nestedFiles.flat();
+}
+
 async function assembleWorkspaceRelease(): Promise<void> {
   const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const workspaceRoot = path.resolve(packageRoot, "../..");
@@ -108,6 +133,7 @@ async function assembleWorkspaceRelease(): Promise<void> {
   if (typeof packageJson.version !== "string") throw new Error("Package version is missing");
   const releasePolicy = releasePolicySchema.safeParse(packageJson.shortflareRelease);
   if (!releasePolicy.success) throw new Error("Package release compatibility policy is missing");
+  await prepareWorkspacePackageSurface();
   await assembleReleaseBundle({
     packageRoot,
     managementBuild: path.join(workspaceRoot, "apps", "management", "dist"),

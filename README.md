@@ -100,5 +100,5 @@ Cloudflare and related product names are trademarks of Cloudflare, Inc.
 
 ## License
 
-Shortflare `0.1.0` is intended to be released under the MIT License. The license
-file and package metadata will be completed before publication.
+Shortflare is available under the [MIT License](LICENSE). Bundled third-party
+code and font notices are included with the public npm package.
