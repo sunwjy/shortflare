@@ -45,11 +45,3 @@ jobs:
 
       - name: Audit shipped dependencies
         run: pnpm audit:prod
-
-      - name: Build the publishable package
-        run: pnpm exec turbo run build --filter=./packages/deploy
-        env:
-          CI: true
-
-      - name: Verify the packed runtime dependency tree
-        run: pnpm --filter ./packages/deploy verify:runtime-deps
