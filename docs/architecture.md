@@ -820,6 +820,16 @@ release channel. Once publication begins, the public package uses npm trusted
 publishing with provenance, and the `latest` dist-tag contains stable releases
 only. It creates no second Instance in the same account.
 
+The Public Package Surface is an explicit release contract. A committed exact
+path allowlist covers the tarball, while deterministic legal verification
+requires the repository MIT license and reviewed notices for every shipped
+third-party dependency or asset. The package-local changelog is the single
+release-note source. Its README provides enough permission, installation,
+diagnosis, and recovery guidance to start without a checkout and links to the
+matching version tag for the complete deployment guide. Release versions remain
+manually reviewed with their compatibility declarations rather than being
+calculated independently by a generic package-versioning tool.
+
 `npx shortflare@latest deploy`:
 
 1. authenticates to Cloudflare and discovers the one existing Instance, if any;
