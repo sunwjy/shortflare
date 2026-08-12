@@ -48,6 +48,30 @@ The upgrade removed these production findings:
 
 There is no residual accepted production dependency risk in this snapshot.
 
+## Updating shipped dependencies
+
+When changing a dependency shipped in the CLI or Worker bundles:
+
+1. Select a release that has cleared the repository's 24-hour release-age
+   policy without adding a new exclusion.
+2. Regenerate the lockfile and inspect changes to the production tree.
+3. If Wrangler's resolved runtime path or versions change, update
+   `packages/deploy/production-dependency-policy.json` and its regression tests.
+   The verifier implementation only needs modification when the expected
+   dependency-tree structure or validation contract changes.
+4. Regenerate `packages/deploy/THIRD_PARTY_NOTICES.md` when shipped packages or
+   versions change.
+5. Run:
+   - `pnpm audit:prod`
+   - `pnpm exec turbo run build --filter=./packages/deploy`
+   - `pnpm --filter ./packages/deploy verify:runtime-deps`
+   - `CI=true pnpm check`
+6. Update the production audit snapshot and document any residual risk.
+
+Do not weaken the verification by removing an expected dependency, accepting a
+version range, adding an audit allowlist, or introducing a release-age exception
+without a separately documented security decision.
+
 ## Development-only audit snapshot
 
 The unscoped `pnpm audit` reports 6 high and 7 moderate development-only
