@@ -1360,7 +1360,7 @@ SOFTWARE.
 
 ---
 
-## hono@4.12.31 (MIT)
+## hono@4.13.1 (MIT)
 
 MIT License
 

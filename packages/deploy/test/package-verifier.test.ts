@@ -60,7 +60,7 @@ function validPackageJson() {
     homepage: "https://github.com/sunwjy/shortflare#readme",
     bugs: { url: "https://github.com/sunwjy/shortflare/issues" },
     keywords: ["url-shortener", "cloudflare", "cloudflare-workers", "self-hosted"],
-    engines: { node: ">=22.12.0" },
+    engines: { node: ">=22.13.0" },
     exports: "./dist/index.js",
     bin: { shortflare: "./dist/bin.js" },
     publishConfig: { access: "public", provenance: true },

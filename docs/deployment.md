@@ -11,7 +11,7 @@ before observing or changing Cloudflare resources.
 
 ## Requirements
 
-- Node.js 22.12 or newer.
+- Node.js 22.13 or newer.
 - A Cloudflare account with a registered domain for the required Redirect
   Custom Domain.
 - A scoped Cloudflare API Token in `CLOUDFLARE_API_TOKEN`.

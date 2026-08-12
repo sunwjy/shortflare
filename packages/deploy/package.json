@@ -60,7 +60,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "verify:pack": "node dist/verify-package.js"
+    "verify:pack": "node dist/verify-package.js",
+    "verify:runtime-deps": "node dist/verify-packed-runtime-dependencies.js"
   },
   "dependencies": {
     "wrangler": "catalog:",
@@ -72,7 +73,7 @@
     "vitest": "catalog:"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "shortflareRelease": {
     "supportedSources": [

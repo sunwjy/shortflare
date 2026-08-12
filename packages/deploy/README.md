@@ -10,7 +10,7 @@ manifest.
 
 ## Requirements
 
-- Node.js 22.12 or newer
+- Node.js 22.13 or newer
 - A Cloudflare account and account ID
 - A registered domain for the required Redirect Custom Domain
 - A scoped Cloudflare API Token
