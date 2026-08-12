@@ -810,15 +810,15 @@ Rules:
 
 ## Deployment and upgrades
 
-The published `shortflare` npm package contains the deployment CLI, versioned
-resource manifests, prebuilt Worker artifacts, and migrations. A Release
-manifest declares schema and release compatibility, rollback safety, resource
-templates, and the SHA-256 digest of every bundled artifact. The CLI verifies
-the complete bundle before observing a mutating plan and never builds from the
-current checkout or downloads deployment artifacts from another release
-channel. The public package is published through npm trusted publishing with
-provenance; the `latest` dist-tag contains stable releases only. It creates no
-second Instance in the same account.
+The planned public `shortflare` npm package contains the deployment CLI,
+versioned resource manifests, prebuilt Worker artifacts, and migrations. A
+Release manifest declares schema and release compatibility, rollback safety,
+resource templates, and the SHA-256 digest of every bundled artifact. The CLI
+verifies the complete bundle before observing a mutating plan and never builds
+from the current checkout or downloads deployment artifacts from another
+release channel. Once publication begins, the public package uses npm trusted
+publishing with provenance, and the `latest` dist-tag contains stable releases
+only. It creates no second Instance in the same account.
 
 `npx shortflare@latest deploy`:
 

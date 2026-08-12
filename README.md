@@ -5,16 +5,17 @@ of Cloudflare's infrastructure. Its goal is to let anyone deploy and own a URL
 shortener in their Cloudflare account with a single command.
 
 > [!IMPORTANT]
-> Shortflare is currently in the idea and early development stage. It is not
-> ready for production use, and the features and deployment workflow described
-> below are goals rather than guarantees.
+> The Shortflare MVP is implemented on `main`, but version `0.1.0` is still in
+> pre-release hardening. The npm package has not been published, and Shortflare
+> is not yet recommended for production use.
 
 ## Vision
 
 Running a personal URL shortener should not require managing servers or
 depending on a hosted shortening provider. Shortflare aims to offer a small,
 self-hosted service that can be deployed to a user's own Cloudflare account,
-with an ideal deployment experience as simple as:
+with a deployment experience as simple as the following after the first public
+release:
 
 ```sh
 npx shortflare@latest deploy
@@ -25,13 +26,15 @@ The target system design and Cloudflare resources are documented in
 and interrupted-deployment recovery are documented in the
 [deployment guide](docs/deployment.md).
 
-## Planned features
+## MVP scope
 
-The initial version of Shortflare is expected to include:
+The implemented MVP includes:
 
-- Custom short paths
-- Click analytics
-- A management UI
+- Link management and custom short paths
+- Invite-only Users with Administrator, Member, and Viewer roles
+- Durable, privacy-aware click analytics
+- A management UI with Link, Analytics, User, Security, and Audit flows
+- An idempotent Cloudflare deployment, diagnosis, and recovery CLI
 
 A documented REST API is planned after the first usable release.
 
@@ -44,8 +47,13 @@ A documented REST API is planned after the first usable release.
 
 ## Status
 
-Shortflare is at an early stage. The target architecture and initial product
-scope are documented, but the implementation and public API are not ready yet.
+The MVP implementation and its acceptance criteria are complete. The project is
+now auditing and resolving the legal, packaging, security, CI, browser, and
+Cloudflare release-gate work required for the first public `0.1.0` release.
+
+There is currently no npm release, Git tag, or GitHub Release. Commands using
+`npx shortflare` are documented for the future public package and are not
+available yet. The public REST API remains outside the MVP.
 
 ## Development
 
@@ -92,4 +100,5 @@ Cloudflare and related product names are trademarks of Cloudflare, Inc.
 
 ## License
 
-Shortflare will be released under the MIT License.
+Shortflare `0.1.0` is intended to be released under the MIT License. The license
+file and package metadata will be completed before publication.
