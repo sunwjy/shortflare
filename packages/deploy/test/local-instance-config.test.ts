@@ -20,8 +20,8 @@ describe("local Instance config", () => {
         accountId: "account-1",
       }),
     ).toEqual({
-      configFile: path.join("/config", "shortflare", "accounts", "account-1.json"),
-      backupDirectory: path.join("/data", "shortflare", "backups", "account-1"),
+      configFile: path.posix.join("/config", "shortflare", "accounts", "account-1.json"),
+      backupDirectory: path.posix.join("/data", "shortflare", "backups", "account-1"),
     });
     expect(
       resolveShortflarePaths({
