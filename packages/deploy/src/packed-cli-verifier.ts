@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile as nodeExecFile } from "node:child_process";
-import { constants } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -9,6 +8,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 
 import { renderCliHelp, renderCliVersion } from "./cli.js";
+import { runNpm } from "./npm-cli.js";
 import { verifyPackedPackage } from "./package-verifier.js";
 import {
   assertPackedRuntimeDependencies,
@@ -114,11 +114,10 @@ export async function smokePackedCli(
   await withInstalledPackage(
     input.tarballPath,
     false,
-    async ({ consumerRoot, installedPackageRoot, environment, npmCliPath }) => {
+    async ({ consumerRoot, installedPackageRoot, environment }) => {
       await verifyInstalledRelease(installedPackageRoot, sourcePackage.version);
       await verifyInstalledDependencies(
         consumerRoot,
-        npmCliPath,
         environment,
         sourcePackage.version,
         dependencyPolicy,
@@ -171,12 +170,10 @@ async function withInstalledPackage<T>(
       consumerRoot: string;
       installedPackageRoot: string;
       environment: NodeJS.ProcessEnv;
-      npmCliPath: string;
     }>,
   ) => Promise<T>,
 ): Promise<T> {
   const consumerRoot = await mkdtemp(path.join(tmpdir(), "shortflare-packed-consumer-"));
-  const npmCliPath = await resolveNpmCliPath();
   const environment = {
     ...process.env,
     CI: "true",
@@ -189,10 +186,8 @@ async function withInstalledPackage<T>(
       path.join(consumerRoot, "package.json"),
       JSON.stringify({ name: "shortflare-packed-consumer", private: true }),
     );
-    await execFile(
-      process.execPath,
+    await runNpm(
       [
-        npmCliPath,
         "install",
         ...(ignoreScripts ? ["--ignore-scripts"] : []),
         "--no-audit",
@@ -200,13 +195,12 @@ async function withInstalledPackage<T>(
         "--package-lock=false",
         tarballPath,
       ],
-      { cwd: consumerRoot, env: environment, encoding: "utf8", maxBuffer },
+      { cwd: consumerRoot, env: environment, maxBuffer },
     );
     return await operation({
       consumerRoot,
       installedPackageRoot: path.join(consumerRoot, "node_modules", "shortflare"),
       environment,
-      npmCliPath,
     });
   } finally {
     await rm(consumerRoot, { recursive: true, force: true });
@@ -232,7 +226,6 @@ async function verifyInstalledRelease(installedPackageRoot: string, expectedVers
 
 async function verifyInstalledDependencies(
   consumerRoot: string,
-  npmCliPath: string,
   environment: NodeJS.ProcessEnv,
   version: string,
   policy: z.infer<typeof productionDependencyPolicySchema>,
@@ -241,11 +234,11 @@ async function verifyInstalledDependencies(
     "shortflare",
     ...new Set(policy.dependencies.flatMap((dependency) => dependency.path)),
   ];
-  const { stdout } = await execFile(
-    process.execPath,
-    [npmCliPath, "ls", ...packageNames, "--all", "--json"],
-    { cwd: consumerRoot, env: environment, encoding: "utf8", maxBuffer },
-  );
+  const { stdout } = await runNpm(["ls", ...packageNames, "--all", "--json"], {
+    cwd: consumerRoot,
+    env: environment,
+    maxBuffer,
+  });
   assertPackedRuntimeDependencies(JSON.parse(stdout), {
     dependencies: [{ path: ["shortflare"], version }, ...policy.dependencies],
   });
@@ -296,25 +289,6 @@ async function verifyInstalledCli(
     (error: unknown) => {
       if (!isMissingPathError(error)) throw error;
     },
-  );
-}
-
-async function resolveNpmCliPath(): Promise<string> {
-  const executableDirectory = path.dirname(process.execPath);
-  const candidates = [
-    path.join(executableDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
-    path.resolve(executableDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
-  ];
-  const readableCandidates = await Promise.all(candidates.map(isReadableFile));
-  const candidate = candidates.find((_, index) => readableCandidates[index]);
-  if (candidate !== undefined) return candidate;
-  throw new Error("Could not locate the npm CLI bundled with Node.js");
-}
-
-async function isReadableFile(filePath: string): Promise<boolean> {
-  return access(filePath, constants.R_OK).then(
-    () => true,
-    () => false,
   );
 }
 
