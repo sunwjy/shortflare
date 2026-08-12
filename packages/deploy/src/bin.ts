@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { renderCliHelp, runCli } from "./cli.js";
+import { renderCliHelp, renderCliVersion, runCli } from "./cli.js";
 import type { DeploymentPlan } from "./deployment-plan.js";
 import { createProductionApplication } from "./production-application.js";
 
@@ -15,6 +15,8 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 
 if (rawArguments.includes("--help") || rawArguments.includes("-h")) {
   process.stdout.write(renderCliHelp(await readPackageVersion()));
+} else if (rawArguments.includes("--version") || rawArguments.includes("-v")) {
+  process.stdout.write(renderCliVersion(await readPackageVersion()));
 } else {
   await runMain();
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { renderCliHelp, runCli } from "../src/cli";
+import { renderCliHelp, renderCliVersion, runCli } from "../src/cli";
 
 describe("shortflare command entrypoint", () => {
   it("links help to documentation for the exact release", () => {
@@ -8,6 +8,10 @@ describe("shortflare command entrypoint", () => {
       "https://github.com/sunwjy/shortflare/blob/v0.1.0/docs/deployment.md",
     );
     expect(renderCliHelp("0.1.0")).not.toContain("docs/deployment.md for complete options");
+  });
+
+  it("renders the exact installed package version for informational output", () => {
+    expect(renderCliVersion("0.1.0")).toBe("0.1.0\n");
   });
 
   it("writes exactly one versioned JSON result to stdout", async () => {

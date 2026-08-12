@@ -61,6 +61,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "verify:pack": "node dist/verify-package.js",
+    "verify:packed-cli": "node dist/verify-packed-cli.js produce",
+    "smoke:packed-cli": "node dist/verify-packed-cli.js smoke",
     "verify:runtime-deps": "node dist/verify-packed-runtime-dependencies.js"
   },
   "dependencies": {

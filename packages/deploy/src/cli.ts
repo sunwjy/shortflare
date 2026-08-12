@@ -37,6 +37,10 @@ Documentation:
 `;
 }
 
+export function renderCliVersion(release: string): string {
+  return `${release}\n`;
+}
+
 export async function runCli(
   arguments_: readonly string[],
   application: CliApplication,

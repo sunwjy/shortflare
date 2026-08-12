@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { assertExactPackPaths, verifyPackedPackage } from "../src/package-verifier";
+import { hashReleaseArtifact } from "../src/release-bundle";
 import { releaseOwnershipPolicy } from "../src/release-manifest";
 
 describe("packed npm surface", () => {
@@ -20,8 +21,18 @@ describe("packed npm surface", () => {
   it("verifies metadata, legal files, release identity, documentation, and paths", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "shortflare-pack-verifier-"));
     const packageRoot = path.join(workspaceRoot, "packages", "deploy");
-    await mkdir(path.join(packageRoot, "release"), { recursive: true });
+    const managementPath = path.join(packageRoot, "release", "artifacts", "management");
+    const redirectPath = path.join(packageRoot, "release", "artifacts", "redirect");
+    const migrationsPath = path.join(packageRoot, "release", "migrations");
     await Promise.all([
+      mkdir(managementPath, { recursive: true }),
+      mkdir(redirectPath, { recursive: true }),
+      mkdir(migrationsPath, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(managementPath, "index.js"), "management\n"),
+      writeFile(path.join(redirectPath, "index.js"), "redirect\n"),
+      writeFile(path.join(migrationsPath, "0000_initial.sql"), "select 1;\n"),
       writeFile(path.join(workspaceRoot, "LICENSE"), "license\n"),
       writeFile(path.join(packageRoot, "LICENSE"), "license\n"),
       writeFile(
@@ -32,11 +43,11 @@ describe("packed npm surface", () => {
       writeFile(path.join(packageRoot, "THIRD_PARTY_NOTICES.md"), "# Third-Party Notices\n"),
       writeFile(path.join(packageRoot, "pack-allowlist.json"), '["package.json"]'),
       writeFile(path.join(packageRoot, "package.json"), JSON.stringify(validPackageJson())),
-      writeFile(
-        path.join(packageRoot, "release", "manifest.json"),
-        JSON.stringify(validManifest()),
-      ),
     ]);
+    await writeFile(
+      path.join(packageRoot, "release", "manifest.json"),
+      JSON.stringify(await validManifest(packageRoot)),
+    );
 
     await expect(
       verifyPackedPackage({
@@ -67,7 +78,7 @@ function validPackageJson() {
   };
 }
 
-function validManifest() {
+async function validManifest(packageRoot: string) {
   return {
     formatVersion: 1,
     release: "0.1.0",
@@ -76,9 +87,22 @@ function validManifest() {
     rollbackSafeFrom: [],
     ownership: releaseOwnershipPolicy,
     artifacts: {
-      management: { path: "release/artifacts/management", sha256: "b".repeat(64) },
-      redirect: { path: "release/artifacts/redirect", sha256: "c".repeat(64) },
-      migrations: { path: "release/migrations", sha256: "d".repeat(64) },
+      management: {
+        path: "release/artifacts/management",
+        sha256: await hashReleaseArtifact(
+          path.join(packageRoot, "release", "artifacts", "management"),
+        ),
+      },
+      redirect: {
+        path: "release/artifacts/redirect",
+        sha256: await hashReleaseArtifact(
+          path.join(packageRoot, "release", "artifacts", "redirect"),
+        ),
+      },
+      migrations: {
+        path: "release/migrations",
+        sha256: await hashReleaseArtifact(path.join(packageRoot, "release", "migrations")),
+      },
     },
   };
 }
